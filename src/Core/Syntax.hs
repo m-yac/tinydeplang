@@ -6,30 +6,32 @@
              RecursiveDo #-}
 
 module Core.Syntax (
-  ULvl(..), Term(..), Decl(..), VarTy(..), Name,
-  fun, ufun, lam, ulam, mkULvl, leqU, recVarTy,
+  -- * The Syntax
+  Decl(..), mkDecl,
+  Term(..), mkVar, mkApp, mkLam, mkFun, mkUndefined, mkUniverse, mkUniverseTop,
+  mkULvlApp, mkULvlLam, mkULvlFun,
+  ULvl(..), mkULvl, mkUSuc, mkUMax, mkUVar, leqU, addU,
+  VarTy(..), Name,
+  -- ** Inductive types
+  IndType(..), TypeCon(..), TypeCons(..),
+  -- * Parsing and Printing
   decl, term, interaction, Interaction(..),
   parseExcept, parseExceptIO, parseRaw, parseOneUnsafe,
-  Pprable(..), ppr
+  Pprable(..), ppr, ss, slvl
 ) where
 
 import Control.Applicative
-import Control.Monad
-import Control.Monad.Except
 import Data.Functor.Classes
-import Data.Foldable
-import Data.Traversable
-import Data.Bifunctor
 import Data.Deriving (deriveShow1) 
-import Data.Maybe
-import Data.List
-import Text.PrettyPrint
-
-import Text.Earley
+-- import Text.PrettyPrint
 import Data.Char
+import Data.List
 import Text.Read
 
+import Data.Natural
+
 import Utils
+import Parser
 
 
 
@@ -39,16 +41,21 @@ import Utils
 --   THE SYNTAX
 -- ==============
 
--- Meta: UIndices are i
+-- Meta: ULvls are i
+--       Naturals are n
 --       Variables are x,y
 --       Terms are X,Y
 --       Type-like terms are A,B
+--       IndType names are T
+--       TypeCons are c or p
 
-data ULvl v = UO                                      -- ^ 0                [UO]
-            | USuc (ULvl v)                           -- ^ S i              [USuc i]
-            | UMax (ULvl v) (ULvl v)                  -- ^ max i j          [UMax i j]
-            | UVar v                                  -- ^ i                [UVar i]
+data Decl v = Decl Name (Term v) (Term v)             -- ^ def x : A = X    [Decl "x" A X]
+            | TypeDecl (IndType v)                    -- ^ def T : A by ..  [TypeDecl (IndType "T" A ..)]
+
 data Term v = Var v                                   -- ^ x                [Var x]
+         -- | IndTypeName IndName                     -- ^ T                [IndTypeName "T"]
+         -- | ConName IndName                         -- ^ c                [ConName "c"]
+         -- | Induction IndName                       -- ^ induction T      [Induction "T"]
             | App (Term v) (Term v)                   -- ^ X Y              [App X Y]
             | Lam Name (Term v) (Scope VarTy Term v)  -- ^ (x : A) >-> X    [Lam "x" A (x. X)]
             | Fun Name (Term v) (Scope VarTy Term v)  -- ^ (x : A) -> B     [Fun "x" A (x. B)]
@@ -58,23 +65,93 @@ data Term v = Var v                                   -- ^ x                [Var
             | ULvlApp (Term v) (ULvl v)               -- ^ X i              [ULvlApp X i]
             | ULvlLam Name (Scope VarTy Term v)       -- ^ i >-> A          [ULvlLam i (i. A)]
             | ULvlFun Name (Scope VarTy Term v)       -- ^ ∀ i. A           [ULvlLam i (i. A)]
-data Decl v = Decl Name (Term v) (Term v)             -- ^ def (x : A) = X  [Decl "x" A X]
-            | TypeDecl (IndType v)                    -- ^ def type ...     [TypeDecl ...]
 
--- Inductive types
-data IndType v = IndType Name (Term v) (Scope IndTy TypeCons v)
-data TypeCon v = TypeCon Name (Term v)
+data ULvl v = ULvl Natural                            -- ^ n                [ULvl n]
+            | USuc Natural (ULvl v)                   -- ^ n + i            [USuc n i]
+            | UMax (ULvl v) (ULvl v)                  -- ^ max i j          [UMax i j]
+            | UVar v                                  -- ^ i                [UVar i]
+
+-- Inductive Types:
+
+data IndType v = IndType Name (Term v) (Scope T TypeCons v) -- ^ T : A -> 𝕋 by ..  [IndType "T" (A -> 𝕋) ..]
+data TypeCon v = Con Name (Term v)                          -- ^ x : A             [Con "x" (T. A)]
+               | IdCon Name (Term v) (Term v)               -- ^ p : X = Y         [PathCon "p" X Y]
 newtype TypeCons v = TypeCons { unTypeCons :: [TypeCon v] }
 
 data VarTy = V | I deriving (Eq, Ord, Read, Show)
-data IndTy = T     deriving (Eq, Ord, Read, Show)
+data T     = T     deriving (Eq, Ord, Read, Show)
 
 type Name = String
+type IndName = String
+
+
+
+
+
+-- ====================
+--   HELPER FUNCTIONS
+-- ====================
+
+mkDecl = Decl
+
+mkTypeDecl :: Name -> Term Name -> [TypeCon Name] -> Decl Name
+mkTypeDecl x ty cs = TypeDecl (IndType x ty (abstract [(x,T)] (TypeCons cs)))
+
+mkVar = Var
+mkApp = App
+
+mkLam :: Name -> Term Name -> Term Name -> Term Name
+mkLam x tyA body = Lam x tyA (abstract [(x,V)] body)
+
+mkFun :: Name -> Term Name -> Term Name -> Term Name
+mkFun x tyA tyB = Fun x tyA (abstract [(x,V)] tyB)
+
+mkUndefined = Undefined
+mkUniverse = Universe
+mkUniverseTop = UniverseTop
+mkULvlApp = ULvlApp
+
+mkULvlLam :: Name -> Term Name -> Term Name
+mkULvlLam i body = ULvlLam i (abstract [(i,I)] body)
+
+mkULvlFun :: Name -> Term Name -> Term Name
+mkULvlFun i tyA = ULvlFun i (abstract [(i,I)] tyA)
+
+mkULvl = ULvl
+mkUSuc = USuc
+mkUMax = UMax
+mkUVar = UVar
+
+-- | @i `leqU` j@ @Just True@ if @i@ must be less than or euqual to @j@, 
+--   @Just False@ if @i@ cannot be less than or equal to @j@, and @Nothing@ if
+--   it cannot yet be determined (e.g. (UVar _) `leqU` (UVar _))
+leqU :: ULvl v -> ULvl v -> Maybe Bool
+leqU (ULvl n)   (ULvl m)   = Just (n <= m)
+leqU (ULvl n)   (USuc m _) = if n <= m then Just True
+                                       else Nothing
+leqU (USuc n _) (ULvl m)   = if n > m then Just False
+                                      else Nothing
+leqU _ _                   = Nothing
+
+-- | @n `addU' i@ adds @n@ to @i@ in the smallest way possible. For example,
+--   @n `addU' (USuc m j) = USuc (n+m) j@. 
+addU :: Natural -> ULvl v -> ULvl v
+addU n (ULvl m)   = ULvl (n+m)
+addU n (USuc m j) = USuc (n+m) j
+addU n j          = USuc n j
+
+
+
+
+
+-- =============
+--   INSTANCES
+-- =============
 
 -- Encoding variable binding:
 instance Functor ULvl where
-    fmap f (UO)                 = UO
-    fmap f (USuc i)             = USuc (f <$> i)
+    fmap f (ULvl n)             = ULvl n
+    fmap f (USuc n i)           = USuc n (f <$> i)
     fmap f (UMax i j)           = UMax (f <$> i) (f <$> j)
     fmap f (UVar v)             = UVar (f v)
 instance Functor Term where
@@ -94,7 +171,8 @@ instance Functor TypeCons where
     fmap f (TypeCons (c:cs))    = TypeCons ((f <$> c) : unTypeCons (f <$> TypeCons cs))
     fmap f (TypeCons [])        = TypeCons []
 instance Functor TypeCon where
-    fmap f (TypeCon n ty)       = TypeCon n (f <$> ty)
+    fmap f (Con n ty)           = Con n (f <$> ty)
+    fmap f (IdCon n tyA tyB)    = IdCon n (f <$> tyA) (f <$> tyB)
 
 -- Encoding where our variables live:
 instance Boxed ULvl where
@@ -104,8 +182,8 @@ instance Boxed Term where
 
 -- Encoding substitution:
 instance Subst ULvl ULvl where
-    (UO) *>>= f                 = UO
-    (USuc i) *>>= f             = USuc (i *>>= f)
+    (ULvl n) *>>= f             = ULvl n
+    (USuc n i) *>>= f           = USuc n (i *>>= f)
     (UMax i j) *>>= f           = UMax (i *>>= f) (j *>>= f)
     (UVar v) *>>= f             = f v
 instance Subst Term Term where
@@ -136,12 +214,13 @@ instance Subst TypeCons Term where
     (TypeCons (c:cs)) *>>= f    = TypeCons ((c *>>= f) : unTypeCons (TypeCons cs *>>= f))
     (TypeCons []) *>>= f        = TypeCons []
 instance Subst TypeCon Term where
-    (TypeCon n ty) *>>= f       = TypeCon n (ty *>>= f)
+    (Con n ty) *>>= f           = Con n (ty *>>= f)
+    (IdCon n tyA tyB) *>>= f    = IdCon n (tyA *>>= f) (tyB *>>= f)
 
 -- Encoding alpha-equivalence:
 instance Eq1 ULvl where
-    liftEq r (UO) (UO)                             = True
-    liftEq r (USuc i) (USuc j)                     = liftEq r i j
+    liftEq r (ULvl n) (ULvl m)                     = n == m
+    liftEq r (USuc n i) (USuc m j)                 = n == m && liftEq r i j
     liftEq r (UMax i j) (UMax k l)                 = (    liftEq r i k && liftEq r j l ) -- Notice! 'max' is commutative
                                                      || ( liftEq r i l && liftEq r j k ) --          on the α-equiv level!!
     liftEq r (UVar v) (UVar w)                     = r v w
@@ -169,12 +248,14 @@ instance Eq1 TypeCons where
     liftEq r (TypeCons [])     (TypeCons [])        = True
     liftEq _ _ _                                    = False
 instance Eq1 TypeCon where
-    liftEq r (TypeCon _ t)     (TypeCon _ t')       = liftEq r t t'
+    liftEq r (Con _ t)         (Con _ t')           = liftEq r t t'
+    liftEq r (IdCon _ tyA tyB) (IdCon _ tyA' tyB')  = liftEq r tyA tyA' && liftEq r tyB tyB'
+    liftEq _ _ _                                    = False
 
 -- Useful for reasoning about free variables:
 instance Foldable ULvl where
-    foldMap f (UO)                 = mempty
-    foldMap f (USuc i)             = foldMap f i
+    foldMap f (ULvl n)             = mempty
+    foldMap f (USuc n i)           = foldMap f i
     foldMap f (UMax i j)           = foldMap f i `mappend` foldMap f j
     foldMap f (UVar v)             = f v
 instance Foldable Term where
@@ -189,8 +270,8 @@ instance Foldable Term where
     foldMap f (ULvlLam _ scope)    = foldMap f scope
     foldMap f (ULvlFun _ scope)    = foldMap f scope
 instance Traversable ULvl where
-    traverse f (UO)                 = pure UO
-    traverse f (USuc i)             = USuc <$> traverse f i
+    traverse f (ULvl n)             = pure $ ULvl n
+    traverse f (USuc n i)           = USuc n <$> traverse f i
     traverse f (UMax i j)           = UMax <$> traverse f i <*> traverse f j
     traverse f (UVar v)             = UVar <$> f v
 instance Traversable Term where
@@ -229,114 +310,41 @@ instance Show a => Show  (TypeCon a) where showsPrec = showsPrec1
 
 
 
-
--- ====================
---   HELPER FUNCTIONS
--- ====================
-
-usuc :: Int -> ULvl a -> ULvl a
-usuc i = if i < 0 then error $ "Cannot have a negative ULevel " ++ show i
-         else if i == 0 then id else usuc (i-1) . USuc
-
-mkULvl :: Int -> ULvl a
-mkULvl i = usuc i UO
-
-lam :: Name -> Term Name -> Term Name -> Term Name
-lam x tyA body = Lam x tyA (abstract [(x,V)] body)
-
-fun :: Name -> Term Name -> Term Name -> Term Name
-fun x tyA tyB = Fun x tyA (abstract [(x,V)] tyB)
-
-ulam :: Name -> Term Name -> Term Name
-ulam i body = ULvlLam i (abstract [(i,I)] body)
-
-ufun :: Name -> Term Name -> Term Name
-ufun i tyA = ULvlFun i (abstract [(i,I)] tyA)
-
-tyDecl :: Name -> Term Name -> [TypeCon Name] -> Decl Name
-tyDecl x ty cs = TypeDecl (IndType x ty (abstract [(x,T)] (TypeCons cs)))
-
--- Assuming both arguments are in normal form...
-leqU :: ULvl v -> ULvl v -> Maybe Bool
-leqU UO UO = Just True
-leqU UO (USuc _) = Just True
-leqU (USuc _) UO = Just False
-leqU (USuc i) (USuc j) = leqU i j
-leqU _ _ = Nothing
-
-recVarTy :: a -> a -> VarTy -> a
-recVarTy x _ V = x
-recVarTy _ x I = x
-
-
-
-
-
 -- ========================
 --   PARSING AND PRINTING
 -- ========================
 
-data ParseExpect = Thing String | Lit String
-                 deriving (Eq, Show)
-
-flattenExpected :: [ParseExpect] -> [String]
-flattenExpected xs = let (ts,ls) = sep xs in ts ++ ls
-    where sep ((Thing str):xs) = first (str:) (sep xs)
-          sep ((Lit   str):xs) = second (("\"" ++ str ++ "\""):) (sep xs)
-          sep [] = ([],[])
-
-keywords :: [String]
-keywords = ["forall", "undefined", "def"]
-
+varparseWild :: String -> Bool
 varparseWild (x:xs) = ( x == '_' && null xs ) || varparse (x:xs)
 varparseWild _      = False
+
+varparse :: String -> Bool
 varparse     (x:xs) = (x:xs) `notElem` keywords
                       && isAlpha x && x /= '𝕋'
                       && all (\y -> isAlphaNum y || y == '-' || y == '_') xs
 varparse     _      = False
 
-decl :: Grammar r (Prod r ParseExpect String (Decl Name))
-decl = mdo
-  let l = token
-      v = satisfy varparse
-  t <- term
-  
-  let lE s = l s <?> Lit s
-      vE = v <?> Thing "a variable"
-      ty = t <?> Thing "a type"
-      tm = t <?> Thing "a term"
-  
-  c <- rule $  l "(" *> (TypeCon <$> v) <* lE ":" <*> ty <* lE ")"
-           <|>          (TypeCon <$> v) <* lE ":" <*> ty
+keywords :: [String]
+keywords = ["forall", "undefined", "def"]
 
-  cs <- rule $  ((:) <$> c) <* l "," <*> cnstr
-            <|> ((:[]) <$> c)
-  
-  let cnstr = cs <?> Thing "a constructor declaration"
-  
-  cds <- rule $ cnstr <|> lE "(" *> pure [] <* lE ")"
-  
-  rule $  lE "def" *>              l "(" *>   (Decl <$> vE) <* lE ":" <*> ty <* lE ")" <* lE "=" <*> tm
-      <|> lE "def" *>                         (Decl <$> vE) <* lE ":" <*> ty <*           lE "=" <*> tm
-      <|> lE "def" *> lE "type" *> l "(" *> (tyDecl <$> vE) <* lE ":" <*> ty <* lE ")" <* lE "where" <*> cds
-      <|> lE "def" *> lE "type" *>          (tyDecl <$> vE) <* lE ":" <*> ty <*           lE "where" <*> cds
+uvarparse :: String -> Bool
+uvarparse (x:xs) = x `elem` ['i','j','k'] && all isDigit xs
+uvarparse _      = False
 
-term :: Grammar r (Prod r ParseExpect String (Term Name))
-term = mdo
-  let l    = token
-      v    = satisfy varparse
+declOrTerm :: EarleyPair Decl Term
+declOrTerm = mdo
+  let v    = satisfy varparse
       vORw = satisfy varparseWild
-      integer = terminal (\x -> do { i <- readMaybe x ; if i < 0 then Nothing else Just i })
-  
-  let lE s = l s <?> Lit s
-      vE = v <?> Thing "a variable"
+      nat = terminal readMaybe
+      
+  let vE    =     v <?> Thing "a variable"
       vORwE = (vORw <?> Thing "a variable") <?> Lit "_"
 
-  i0 <- rule $  mkULvl <$> integer
-            <|> UVar <$> v
+  i0 <- rule $  ULvl <$> nat
+            <|> UVar <$> satisfy uvarparse
             <|> l "(" *> i1 <* l ")"
 
-  i1 <- rule $  usuc <$> integer <* l " + " <*> ulvl1
+  i1 <- rule $  USuc <$> nat <* l " + " <*> ulvl1
             <|> l "max" *> (UMax <$> ulvl0) <*> ulvl0
             <|> i0
   
@@ -347,121 +355,72 @@ term = mdo
             <|> l "𝕋{ω}" *> pure UniverseTop
             <|> l "(" *> tm2 <* lE ")"
   
-  x1 <- rule $      App <$> (x1) <*> (x0)
-            <|> ULvlApp <$> (x1) <*> (i0)
+  x1 <- rule $      App <$> (x1)          <*> (x0)
+            <|> ULvlApp <$> (x1) <* l "@" <*> (i0)
             <|> x0
   
   x2 <- rule $  xlam
             <|> l "forall" *> xfalls
-            <|> l "(" *>  (fun <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <* lE "->" <*> (ty2)
-            <|>           (fun "__")                <$> (ty1)           <* lE "->" <*> (ty2)
-            <|> l "∀" *> (ufun <$> vE)    <* lE "," <*> (ty2)
+            <|> l "(" *> (mkFun <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <* lE "->" <*> (ty2)
+            <|>          (mkFun "__")                <$> (ty1)           <* lE "->" <*> (ty2)
+            <|> l "∀" *> (mkULvlFun <$> vE)    <* lE "," <*> (ty2)
             <|> l "undefined" *> lE ":" *> (Undefined <$> ty2)
             <|> x1
   
+  xlam <- rule $  l "(" *>     (mkLam <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <*> (xlam)
+              <|> l "(" *>     (mkLam <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <* lE ">->" <*> (tm2)
+              <|> l "(" *> (mkULvlLam <$> vORwE)                     <* lE ")" <*> (xlam)
+              <|> l "(" *> (mkULvlLam <$> vORwE)                     <* lE ")" <* lE ">->" <*> (tm2)
+  
+  xfalls <- rule $  lE "(" *> (mkFun <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <*> (xfalls)
+                <|> lE "," *> (ty2)
+                
   let [tm0,tm1,tm2] = (<?> Thing "a term") <$> [x0,x1,x2]
   let [ty0,ty1,ty2] = (<?> Thing "a type") <$> [x0,x1,x2]
   
-  xlam <- rule $  l "(" *>  (lam <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <*> (xlam)
-              <|> l "(" *>  (lam <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <* lE ">->" <*> (tm2)
-              <|> l "(" *> (ulam <$> vORwE)                     <* lE ")" <*> (xlam)
-              <|> l "(" *> (ulam <$> vORwE)                     <* lE ")" <* lE ">->" <*> (tm2)
+  c <- rule $  l "(" *> (Con <$> v) <* lE ":" <*> ty2 <* lE ")"
+           <|>          (Con <$> v) <* lE ":" <*> ty2
+
+  cs <- rule $  ((:) <$> c) <* l "," <*> cnstrs
+            <|> ((:[]) <$> c)
   
-  xfalls <- rule $  lE "(" *> (fun <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <*> (xfalls)
-                <|> lE "," *> (ty2)
+  let cnstrs = cs <?> Thing "a constructor declaration"
   
-  return x2
+  cds <- rule $ cnstrs <|> lE "(" *> pure [] <* lE ")"
+  
+  d4 <- rule $  lE "def" *> l "(" *>       (Decl <$> vE) <* lE ":" <*> ty2 <* lE ")" <* lE "=" <*> tm2
+            <|> lE "def" *>                (Decl <$> vE) <* lE ":" <*> ty2 <*           lE "=" <*> tm2
+            <|> lE "def" *> l "(" *> (mkTypeDecl <$> vE) <* lE ":" <*> ty2 <* lE ")" <* lE "by" <*> cds
+            <|> lE "def" *>          (mkTypeDecl <$> vE) <* lE ":" <*> ty2 <*           lE "by" <*> cds
+  
+  return (d4,x2)
+
+decl :: EarleyGrammar Decl
+decl = fst <$> declOrTerm
+
+term :: EarleyGrammar Term
+term = snd <$> declOrTerm
 
 data Interaction v = IDecl (Decl v)
                    | ITerm (Term v)
                    | ICmnd (String) [String]
                    deriving (Eq, Show)
 
-interaction :: Grammar r (Prod r ParseExpect String (Interaction Name))
+interaction :: EarleyGrammar Interaction
 interaction = mdo
-  let l    = token
-      lE s = l s <?> Lit s
-      cmd  = satisfy (all (\y -> isAlphaNum y || y == '-' || y == '_'))
+  let cmd  = satisfy (all (\y -> isAlphaNum y || y == '-' || y == '_'))
       cmdE = cmd <?> Thing "a command"
   d <- decl
   t <- term
   
   string <- rule $  l "\"" *> satisfy (all (/= '\"')) <* lE "\""
-                <|> cmd
+                <|> satisfy (const True)
   
   args <- rule $ (:) <$> string <*> args <|> pure [] 
   
   rule $  (IDecl <$> d)
       <|> (ITerm <$> t)
       <|> l ":" *> (ICmnd <$> cmdE) <*> args
-
-tokenize :: String -> StrExcept [String]
-tokenize str = let refine acc ('𝕋':xs) = case xs of '{':'ω':'}':xs' -> (\x -> acc:"𝕋{ω}":x) <$> refine [] xs'
-                                                    '{':xs'         -> (\x -> acc:"𝕋{"  :x) <$> refine [] xs'
-                                                    -- 'I':'d':'x':xs' -> (acc : "𝕋Idx" :) <$> refine [] xs'
-                                                    _ -> throwError $ "[Error] [Tokenize] Illegal use of 𝕋 in: " ++ show ('𝕋':xs) 
-                   refine acc ('{':xs) = (\x -> acc:"{":x) <$> refine [] xs
-                   refine acc ('}':xs) = (\x -> acc:"}":x) <$> refine [] xs
-                   refine acc (':':xs) = (\x -> acc:":":x) <$> refine [] xs
-                   refine acc ('(':xs) = (\x -> acc:"(":x) <$> refine [] xs
-                   refine acc (')':xs) = (\x -> acc:")":x) <$> refine [] xs
-                   refine acc (',':xs) = (\x -> acc:",":x) <$> refine [] xs
-                   refine acc ('\"':xs) = (\x -> acc:"\"":x) <$> refine [] xs
-                   refine acc (x:xs)   = refine (acc ++ [x]) xs
-                   refine acc []       = return [acc]
-                in do refined <- concat <$> mapM (refine []) (words str)
-                      return (filter notNull refined)
-
--- TODO add support for strings...
-untokenizeS :: [String] -> ShowS
-untokenizeS (x:"}":xs) = ss x . untokenizeS ("}":xs)
-untokenizeS (x:")":xs) = ss x . untokenizeS (")":xs)
-untokenizeS (x:",":xs) = ss x . untokenizeS (",":xs)
-untokenizeS ("𝕋{":xs) = ss "𝕋{" . untokenizeS xs
-untokenizeS ("{":xs) = ss "{" . untokenizeS xs
-untokenizeS ("(":xs) = ss "(" . untokenizeS xs
-untokenizeS (x:xs) = ss x . ss " " . untokenizeS xs
-untokenizeS [] = id
-
-untokenize :: [String] -> String
-untokenize x = untokenizeS x []
-
-parseExcept :: (forall r. Grammar r (Prod r ParseExpect String (t Name))) -> String -> StrExcept [t Name]
-parseExcept g str = do
-  tks <- tokenize str
-  case tks of
-    [] -> return []
-    (x:xs) -> case fullParses (parser g) tks of
-        ([], Report pos expd _) ->
-            throwError $ "[Error] [Parse] Parsing failed on:\n"
-                ++ untokenize tks ++ "\n"
-                ++ (replicate (length (untokenize (take pos tks))) ' ') ++ "^"
-                ++ case nub (flattenExpected expd) of
-                     []  -> ""
-                     xs  -> "\nExpected " ++ (intercalate " or " xs) ++ ", got "
-                            ++ (if pos < length tks then "\"" ++ (tks !! pos) ++ "\"." else "nothing.")
-        (parses, Report _ _ _) -> return parses
-
-parseExceptIO :: (forall r. Grammar r (Prod r ParseExpect String (t Name))) -> String -> IO [t Name]
-parseExceptIO g = either (\err -> putStrLn err >> return []) (return) . runExcept . parseExcept g
-
-parseRaw :: (forall r. Grammar r (Prod r ParseExpect String (t Name))) -> String -> ([t Name], Report ParseExpect [String])
-parseRaw g str = case runExcept $ tokenize str of
-                     Right tks -> fullParses (parser g) tks
-                     Left err  -> error $ "\'tokenize\' hit an error: " ++ err
-
-parseOneUnsafe :: Show (t Name) => (forall r. Grammar r (Prod r ParseExpect String (t Name))) -> String -> (t Name)
-parseOneUnsafe g str = case runExcept $ parseExcept g str of
-                           Right [x] -> x
-                           Right xs  -> error $ "\'parseOneUnsafe\' did not recieve exactly one parse! We got: " ++ show xs
-                           Left err  -> error $ "\'parseWithError g str\' hit an error: " ++ err
-
-testParse :: String -> Bool -> IO ()
-testParse str b = let (parsed, report) = parseRaw term str
-                   in putStr . unlines . (if null (unconsumed report) then id else (:) ("Error: " ++ show report))
-                       $ (\s -> (snd (pprS s) []) ++ (if b then "\n" ++ (show s) else "")) <$> (fst $ parseRaw term str)
-
-
 
 
 -- Printing:
@@ -478,26 +437,16 @@ ss = showString
 slvl :: Int -> (Int, ShowS) -> ShowS
 slvl i (lvl, str) = if lvl > i then ss "(" . str . ss ")" else str
 
-
-data ULvlPpr = ULvlInt Int | ULvlStr Int ShowS
-
-pprSU' :: ULvl String -> (Int, ULvlPpr)
-pprSU' (UVar v)          = (0, ULvlStr 0 $ ss v)
-pprSU' (UO)              = (0, ULvlInt 0)
-pprSU' (USuc i)          = case pprSU' i of (_, ULvlInt x  ) -> (0, ULvlInt (x+1)  )
-                                            (_, ULvlStr x s) -> (1, ULvlStr (x+1) s)
-pprSU' (UMax i j)        = (1, ULvlStr 0 $ ss "max " . slvl 0 (pprS i) . ss " " . slvl 0 (pprS j))
-
 instance Pprable ULvl where
-    pprS = fmap (\case ULvlInt i   -> ss (show i)
-                       ULvlStr 0 s -> s
-                       ULvlStr i s -> ss (show i) . ss " + " . s) . pprSU'
-
+    pprS (UVar v)    = (0, ss v)
+    pprS (ULvl n)    = (0, ss (show n))
+    pprS (USuc n i)  = (1, ss (show n) . ss " + " . slvl 1 (pprS i))
+    pprS (UMax i j)  = (1, ss "max " . slvl 0 (pprS i) . ss " " . slvl 0 (pprS j))
 
 pprS_Lams :: Term String -> (Int, ShowS)
 pprS_Lams (Lam n tyA scope) = (2, ss "(" . ss n . ss " : " . slvl 2 (pprS tyA) . ss ") " . slvl 2 (pprS_Lams $ instantiate [(V,n)] scope))
 pprS_Lams (ULvlLam n scope) = (2, ss "(" . ss n                                . ss ") " . slvl 2 (pprS_Lams $ instantiate [(I,n)] scope))
-pprS_Lams term              = (2, ss ">-> " . slvl 2 (pprS term))
+pprS_Lams rhs               = (2, ss ">-> " . slvl 2 (pprS rhs))
 
 instance Pprable Term where
     pprS (Var v)           = (0, ss v)
@@ -509,7 +458,7 @@ instance Pprable Term where
     pprS (Undefined tyA)   = (2, ss "undefined : " . slvl 2 (pprS tyA))
     pprS (Universe i)      = (0, ss "𝕋{" . slvl 1 (pprS i) . ss "}")
     pprS (UniverseTop)     = (0, ss "𝕋{ω}")
-    pprS (ULvlApp x i)     = (1, slvl 1 (pprS x) . ss " " . slvl 0 (pprS i))
+    pprS (ULvlApp x i)     = (1, slvl 1 (pprS x) . ss " @" . slvl 0 (pprS i))
     pprS (ULvlLam n scope) = pprS_Lams (ULvlLam n scope)
     pprS (ULvlFun n scope) = (2, ss "∀ " . ss n . ss ", " . slvl 2 (pprS $ instantiate [(I,n)] scope))
 
@@ -521,7 +470,7 @@ instance Pprable Decl where
 
 instance Pprable IndType where
     pprS (IndType n ty scope)
-      = (4, ss "type " . ss n . ss " : " . slvl 2 (pprS ty) . ss " where" . (if null (unTypeCons cs) then ss " ()" else snd (pprS cs)))
+      = (4, ss n . ss " : " . slvl 2 (pprS ty) . ss " by" . (if null (unTypeCons cs) then ss " ()" else snd (pprS cs)))
       where cs = instantiate [(T,n)] scope
 
 pprS_TypeConsTail :: [TypeCon String] -> (Int, ShowS)
@@ -533,6 +482,11 @@ instance Pprable TypeCons where
     pprS (TypeCons [])     = (4, id)
 
 instance Pprable TypeCon where
-    pprS (TypeCon n ty) = (4, ss n . ss " : " . slvl 2 (pprS ty))
+    pprS (Con n ty) = (4, ss n . ss " : " . slvl 2 (pprS ty))
+    pprS (IdCon n tyA tyB) = (4, ss n . ss " : " . slvl 1 (pprS tyA) . ss " = " . slvl 1 (pprS tyB))
 
-
+instance Pprable Interaction where
+    pprS (IDecl d) = pprS d
+    pprS (ITerm t) = pprS t
+    pprS (ICmnd cmd args) = (4, ss ":" . ss cmd . ss (if notNull args then " " else "") 
+                                       . ss (intercalate " " args))

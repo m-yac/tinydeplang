@@ -3,25 +3,69 @@
              LambdaCase #-}
 
 module Utils (
+    -- * Error Handling
+    ExceptM(..), StrExcept, addWarning,
+    -- * Custom Unbound
     Boxed(..), Subst(..),
     Bnd.Var, Scope(..),
     abstractf, abstract, instantiatef, instantiate,
     subst, substVar, closed, isClosed, fv,
-    lines_dbl, notNull, StrExcept
+    -- * Other Useful Functions
+    lines_dbl, notNull
 ) where
 
 import Data.Maybe
 import Control.Monad.Except
 import Data.Functor.Classes
 import Data.Foldable
+import Data.Deriving (deriveShow1) 
+
 import qualified Bound as Bnd
 
 
 
-notNull :: [a] -> Bool
-notNull = not . null
-
+-- FIX LATER
 type StrExcept = Except String
+
+data ExceptM w e a = Error e
+                   | NoError [w] a
+
+instance Eq w => Eq2 (ExceptM w) where
+    liftEq2 e1 _  (Error e)      (Error e')       = e1 e e'
+    liftEq2 _  e2 (NoError ws a) (NoError ws' a') = ws == ws' && e2 a a'
+    liftEq2 _ _ _ _                               = False
+
+instance (Eq w, Eq e      ) => Eq1 (ExceptM w e)   where liftEq = liftEq2 (==)
+instance (Eq w, Eq e, Eq a) => Eq  (ExceptM w e a) where (==) = eq1
+
+instance Show w => Show2 (ExceptM w) where
+    liftShowsPrec2 sp1 _ _ _ d (Error e) = showsUnaryWith sp1 "Error" d e
+    liftShowsPrec2 _ _ sp2 _ d (NoError ws a) = showsBinaryWith showsPrec sp2 "NoError" d ws a
+
+instance (Show w, Show e        ) => Show1 (ExceptM w e)   where liftShowsPrec = liftShowsPrec2 showsPrec showList
+instance (Show w, Show e, Show a) => Show  (ExceptM w e a) where showsPrec = showsPrec2
+
+instance Functor (ExceptM w e) where
+    fmap f (Error e)      = Error e
+    fmap f (NoError ws a) = NoError ws (f a)
+
+instance Applicative (ExceptM w e) where
+    pure a = NoError [] a
+    Error e      <*> _             = Error e
+    NoError ws f <*> Error e       = Error e
+    NoError ws f <*> NoError ws' x = NoError (ws ++ ws') (f x)
+
+instance Monad (ExceptM w e) where
+    Error e      >>= _ = Error e
+    NoError ws a >>= f = NoError ws id <*> f a
+
+instance MonadError e (ExceptM w e) where
+    throwError = Error
+    Error e      `catchError` f = f e
+    NoError ws a `catchError` _ = NoError ws a
+
+addWarning :: w -> ExceptM w e ()
+addWarning w = NoError [w] ()
 
 
 
@@ -117,14 +161,16 @@ fv = toList
 
 
 
+
+notNull :: [a] -> Bool
+notNull = not . null
+
+-- | Splits on two line breaks
 lines_dbl :: String -> [String]
-lines_dbl = go []
+lines_dbl = filter notNull . go []
     where go accum [] = [accum]
           go accum (x:xs) = let (ns,rest) = span (== '\n') (x:xs)
                              in case ns of
-                                    '\n':'\n':_ -> accum : (go [] rest)
-                                    ['\n'] -> go (accum ++ " ") rest
+                                    _:_:_ -> accum : (go [] rest)
+                                    _:[] -> go (accum ++ " ") rest
                                     [] -> go (accum ++ [x]) xs
-
-
-

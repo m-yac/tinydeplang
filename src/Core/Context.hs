@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module Core.Context (
+    StrExcept,
     CtxElement(..), getName, nominallyEq, getDecls,
     Ctx, emptyCtx, termVar, termVarDef, ulvlVar, ulvlVarDef,
     WithCtx, runWithCtx, runWithEmptyCtx, execWithCtx, execWithEmptyCtx,
@@ -11,7 +12,6 @@ module Core.Context (
 
 import Control.Monad.Reader
 import Control.Monad.Except
-import Data.Bifunctor
 import Data.Maybe
 import Data.List
 

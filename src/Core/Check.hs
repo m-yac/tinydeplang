@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 
 module Core.Check where
 
@@ -13,6 +14,10 @@ import Core.Eval
 
 
 
+-- | Given a 'WithCtx' action and a nonempty list of possibilities, applies
+--   the action to each element of the list and segregating those which error
+--   from those which do not. If only one remains error-free, 'resolveAmbig'
+--   returns that one. Otherwise, errors are thrown appropriately.
 resolveAmbig :: Show (t Name) => (t Name -> WithCtx Name b) -> [t Name] -> WithCtx Name b
 resolveAmbig f ts = do
     ctx <- getCtx
@@ -21,7 +26,7 @@ resolveAmbig f ts = do
         -- the 'no survivors' but 'single error' case:
         ([err],[]) -> throwError err
         -- the 'no survivors' but 'multiple errors' (i.e. worst) case:
-        (errs,[]) -> throwError $ "irrecoverable ambiguity - none of the following possible readings typecheck:"
+        (errs,[]) -> throwError $ "irrecoverable ambiguity - none of the following readings are possible:"
                                    ++ (errs >>= ("\n- " ++))
         -- the 'one survivor' (i.e. best) case:
         (_,[x]) -> return x
@@ -29,6 +34,8 @@ resolveAmbig f ts = do
         (_,xs) -> throwError $ "term is ambiguous - could be read as any of:"
                                ++ (ts >>= (('\n':) . show))
 
+-- | Given a 'Term', returns the term and its type. If an error occurs, it is
+--   handled by the 'WithCtx' monad.
 check :: Term Name -> WithCtx Name (Term Name, Term Name)
 
 -- Var v                                   -- ^ x                [Var x]
@@ -82,8 +89,8 @@ check (Undefined tyA) = do
 -- Universe (ULvl v)                       -- ^ 𝕋{i}             [Universe i]
 
 check (Universe i) = do
-    -- At the very least, we know 𝕋{i} : 𝕋{S i}
-    return (Universe i, Universe (USuc i))
+    -- At the very least, we know 𝕋{i} : 𝕋{1 + i}
+    return (Universe i, Universe (1 `addU` i))
 
 -- UniverseTop                             -- ^ 𝕋{ω}             [UniverseTop]
 
@@ -119,8 +126,9 @@ check (ULvlFun i scope) = do
     -- In either case, (∀ i. A) : 𝕋{ω}
     return $ (ULvlFun i (abstract [(i,I)] tyA), UniverseTop)
 
--- Decl v (Term v) (Term v)                -- ^ def (x : A) = X  [Decl "x" A X]
 
+-- | Given a 'Decl', an returns the decl with a list of all things which must
+--   be added to the context
 checkDecl :: Decl Name -> WithCtx Name (Decl Name, [CtxElement Name])
 checkDecl (Decl x tyA def) = do
     -- Find the type of X : B
@@ -131,6 +139,8 @@ checkDecl (Decl x tyA def) = do
     return (Decl x tyA def', [termVarDef x tyA def'])
 checkDecl decl = return (decl, [])
 
+-- | Given a list of lists of possible readings of 'Decl's, returns the final
+--   context Γ and the final list of unambiguous decls
 checkFile :: [[Decl Name]] -> WithCtx Name (Ctx Name, [Decl Name])
 checkFile (decls:xs) = do
     (decl, ctxElts) <- resolveAmbig checkDecl decls
@@ -139,28 +149,14 @@ checkFile [] = do
     ctx <- getCtx
     return (ctx,[])
 
--- -- Allows mutually recursive definitions!!
--- checkFile :: [Decl Name] -> WithCtx Name (Ctx Name)
--- checkFile xs = fstPass xs (sndPass xs)
---     where fstPass [] action = action
---           fstPass ((Decl x tyA _):xs) action = do
---               eltsEq <- filter ((== x) . getName) <$> getCtx
---               unless (null eltsEq) (throwError $ "top-level declaration of " ++ x ++ " given twice")
---               extendCtx [termVar x tyA] (fstPass xs action)
---           sndPass [] = getCtx
---           sndPass (decl:xs) = do
---               ctxDfn <- checkDecl decl
---               modifyCtx (\e -> if getName ctxDfn == getName e
---                                then ctxDfn else e)
---                         (sndPass xs)
 
 
 
 
+-- ========================
 
-
-
-
+-- | Errors if the given 'Term' is not a 'Fun'. Otherwise returns its name,
+--   type, and scope (see the definition of 'Fun')
 ensureIsFun :: Term Name -> WithCtx Name (Name, Term Name, Scope VarTy Term Name)
 ensureIsFun x = do
     x' <- eval WHNF x
@@ -170,6 +166,8 @@ ensureIsFun x = do
                           ++ (if x == x' then ""
                               else "(== " ++ ppr x' ++ ")") ++ " is not a function type"
 
+-- | Errors if the given 'Term' is not a 'Universe'. Otherwise returns its
+--   'ULvl' (see the definition of 'Universe')
 ensureIsUniverse :: Term Name -> WithCtx Name (ULvl Name)
 ensureIsUniverse x = do
     x' <- eval WHNF x
@@ -179,6 +177,9 @@ ensureIsUniverse x = do
                            ++ (if x == x' then ""
                               else "(== " ++ ppr x' ++ ")") ++ " is not a finite type universe"
 
+-- | Errors if the given 'Term' is not a 'Universe' and not a 'UniverseTop'.
+--   Otherwise returns its 'ULvl' if it has one (see the definitions of
+--   'Universe' and 'UniverseTop')
 ensureIsUniverseOrTop :: Term Name -> WithCtx Name (Maybe (ULvl Name))
 ensureIsUniverseOrTop x = do
     x' <- eval WHNF x
@@ -189,6 +190,8 @@ ensureIsUniverseOrTop x = do
                            ++ (if x == x' then ""
                               else "(== " ++ ppr x' ++ ")") ++ " is not a type universe"
 
+-- | Errors if the given 'Term' is not a 'ULvlFun'. Otherwise returns its name
+--   and scope (see the definition of 'ULvlFun')
 ensureIsULvlFun :: Term Name -> WithCtx Name (Name, Scope VarTy Term Name)
 ensureIsULvlFun x = do
     x' <- eval WHNF x
@@ -202,11 +205,16 @@ ensureIsULvlFun x = do
 
 
 
+-- ========================
+
+-- | Errors if the two terms give are unequal modulo alpha-equivalence
 equate :: Term Name -> Term Name -> WithCtx Name ()
 equate t1 t2 = do
     t1' <- eval WHNF t1
     t2' <- eval WHNF t2
+    -- Get out early if alpha-equiv
     if t1' == t2' then return ()
+    -- Otherwise...
     else case (t1', t2') of
         -- Var v                                     -- ^ x                 [Var x]
         (Var v1, Var v2) | v1 == v2 -> return ()
@@ -253,7 +261,9 @@ equate t1 t2 = do
         -- Otherwise:
         (x1, x2) -> throwError $ "equate error for terms " ++ ppr x1 ++ " and " ++ ppr x2
 
-
+-- | @A <: B@ errors if it is not the case that @x : A@ implies that @x : B@.
+--   Only applies to universes and types composed of universes, since we have
+--   @𝕋{i} <: 𝕋{j}@ whenever @i@ is less than or equal to @j@.
 (<:) :: Term Name -> Term Name -> WithCtx Name ()
 t1 <: t2 = do
     t1' <- eval WHNF t1

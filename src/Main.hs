@@ -4,9 +4,7 @@ module Main where
 
 import System.IO
 import System.Environment
-import Data.Foldable
 import Data.List
-import Control.Monad
 
 import Utils
 import Core.Syntax
@@ -68,9 +66,9 @@ data InteractionResult v = IAddToCtx [CtxElement v]
 data ICommand = IQuit | ILoad String | IUnknown
 
 parseCmnd :: String -> [String] -> ICommand
-parseCmnd s []   | s == "quit" || s == "q" = IQuit
-parseCmnd s [a0] | s == "load"             = ILoad a0
-parseCmnd _ _                              = IUnknown
+parseCmnd s [] | s == "quit" || s == "q" = IQuit
+parseCmnd s as | s == "load"             = ILoad (intercalate " " as)
+parseCmnd _ _                            = IUnknown
 
 checkInteraction :: Interaction Name -> WithCtx Name (InteractionResult Name)
 checkInteraction (IDecl d)    = IAddToCtx . snd <$> checkDecl d

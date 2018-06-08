@@ -9,28 +9,38 @@ import Core.Context
 
 
 
--- eval for ULvl is always eager...
+-- | Eagerly evaluates a 'ULvl', using the context given
 evalU :: ULvl Name -> WithCtx Name (ULvl Name)
 
 -- UO                                        -- ^ 0                 [UO]
 
-evalU UO = return UO
+evalU (ULvl n) = return $ ULvl n
 
 -- USuc (ULvl v)                             -- ^ S i               [USuc i]
 
-evalU (USuc i) = USuc <$> (evalU i)
+evalU (USuc n i) = do
+    i' <- evalU i
+    return $ case i' of
+      (ULvl m)   -> ULvl (n + m)
+      (USuc m i) -> USuc (n + m) i'
+      _          -> if n == 0 then i' else USuc n i'
 
 -- UMax (ULvl v) (ULvl v)                    -- ^ max i j           [UMax i j]
 
 evalU (UMax i j) = do
     i' <- evalU i
     j' <- evalU j
-    return $ umax i' j' 
-    where umax UO       UO       = UO
-          umax UO       (USuc i) = USuc i
-          umax (USuc i) UO       = USuc i
-          umax (USuc i) (USuc j) = USuc (umax i j)
-          umax i        j        = UMax i j
+    return $ case (i',j') of
+      ((ULvl n)  , (ULvl m)  ) -> ULvl (max n m)
+      ((ULvl n)  , (USuc m i)) -> if n <= m then USuc m i
+                                            else USuc m (UMax (ULvl (n-m)) i)
+      ((USuc n i), (ULvl m)  ) -> if n >= m then USuc n i
+                                            else USuc n (UMax i (ULvl (m-n)))
+      ((USuc n i), (USuc m j)) -> if n <= m then USuc n (UMax i (ULvl (m-n)))
+                                            else USuc m (UMax (ULvl (n-m)) i)
+      ((ULvl 0)  , j         ) -> j
+      (i         , (ULvl 0)  ) -> i
+      (i         , j         ) -> UMax i j
 
 -- UVar v                                    -- ^ i                 [UVar i]
 
@@ -43,8 +53,10 @@ evalU (UVar v) = do
 
 
 
-data Strength = WHNF | NF deriving (Eq, Read, Show)
+data Strength = NF | WHNF deriving (Eq, Read, Show)
 
+-- | Evaluates a 'Term', to either weak head normal form ('WHNF') or normal
+--   form ('NF'), using the context given
 eval :: Strength -> Term Name -> WithCtx Name (Term Name)
 
 -- Var v                                   -- ^ x                [Var x]

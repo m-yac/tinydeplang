@@ -2,10 +2,16 @@
 def id : ∀ i, forall (A : 𝕋{i}), A -> A
        = (i) (A : 𝕋{i}) (x : A) >-> x
 
-def type Empty : 𝕋{0} where ()
+def Empty : 𝕋{0} by ()
 
-def type Nat : 𝕋{0} where
+def Nat : 𝕋{0} by
     O : Nat,
     S : Nat -> Nat
 
-def (main : 𝕋{1}) = id 2 𝕋{1} 𝕋{0}
+def even : Nat -> 𝕋{0} by
+    evenO : even O,
+    evenS : forall (n : Nat), even n -> even (S (S n))
+
+def (main : 𝕋{1}) = id @2 𝕋{1} 𝕋{0}
+
+
