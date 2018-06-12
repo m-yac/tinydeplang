@@ -52,8 +52,8 @@ check (App x y) = do
     (x', (z, tyA, scope)) <- mapM ensureIsFun =<< check x
     -- Find the type of Y : C
     (y', tyC) <- check y
-    -- Ensure that Y : C implies that Y : A  - i.e. C <: A
-    tyC <: tyA
+    -- Ensure the types match up, i.e. A = C
+    equate tyA tyC
     -- We now know (X Y) : B[Y/z]
     return (App x' y', subst z y (instantiate [(V,z)] scope))
 
@@ -133,7 +133,7 @@ checkDecl :: Decl Name -> WithCtx Name (Decl Name, [CtxElement Name])
 checkDecl (Decl x tyA def) = do
     -- Find the type of X : B
     (def', tyB) <- check def
-    -- Ensure they types match up, i.e. tyA = tyB
+    -- Ensure the types match up, i.e. A = B
     equate tyA tyB
     -- Return what should be added to Γ
     return (Decl x tyA def', [termVarDef x tyA def'])
@@ -261,33 +261,4 @@ equate t1 t2 = do
         -- Otherwise:
         (x1, x2) -> throwError $ "equate error for terms " ++ ppr x1 ++ " and " ++ ppr x2
 
--- | @A <: B@ errors if it is not the case that @x : A@ implies that @x : B@.
---   Only applies to universes and types composed of universes, since we have
---   @𝕋{i} <: 𝕋{j}@ whenever @i@ is less than or equal to @j@.
-(<:) :: Term Name -> Term Name -> WithCtx Name ()
-t1 <: t2 = do
-    t1' <- eval WHNF t1
-    t2' <- eval WHNF t2
-    if t1' == t2' then return ()
-    else case (t1', t2') of
-        -- Fun Names (Term v) (Scope VarTy Term v)   -- ^ (x : A) -> B      [Fun "x" A (x. B)]
-        (Fun x1 ty1 scope1, Fun x2 ty2 scope2) -> do
-            ty2 <: ty1
-            extendCtx [termVar x1 ty1, termVar x2 ty2] $ do
-                (instantiate [(V,x1)] scope1) <: (instantiate [(V,x2)] scope1)
-        -- Universe (ULvl v)                         -- ^ 𝕋{i}              [Universe i]
-        (Universe i1, Universe i2) -> do
-            i1' <- evalU i1
-            i2' <- evalU i2
-            if leqU i1' i2' == Just True then return ()
-            else throwError $ "Universe level error:  " ++ ppr i1 ++ " >= " ++ ppr i2
-        -- UniverseTop                             -- ^ 𝕋{ω}             [UniverseTop]
-        (UniverseTop, UniverseTop) -> do
-            return $ trace "\n[Warning: Checking subtyping of UniverseTop!]\n" ()
-        -- ULvlFun Name (Scope VarTy Term v)       -- ^ ∀ i. A           [ULvlLam i (i. A)]
-        (ULvlFun i1 scope1, ULvlFun i2 scope2) -> do
-            extendCtx [ulvlVar i1, ulvlVar i2] $ do
-                (instantiate [(I,i1)] scope1) <: (instantiate [(I,i2)] scope1)
-        -- Otherwise:
-        (x1, x2) -> throwError $ "subtyping error for terms " ++ ppr x1 ++ " and " ++ ppr x2
 

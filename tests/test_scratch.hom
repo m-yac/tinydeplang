@@ -2,15 +2,15 @@
 def id : ∀ i, forall (A : 𝕋{i}), A -> A
        = (i) (A : 𝕋{i}) (x : A) >-> x
 
-def Empty : 𝕋{0} by ()
+def Empty : ∀ i, 𝕋{i} by ()
 
-def Nat : 𝕋{0} by
-    O : Nat,
-    S : Nat -> Nat
+def Nat : ∀ i, 𝕋{i} by
+    O : ∀ i, Nat @i,
+    S : ∀ i, Nat @i -> Nat @i
 
-def even : Nat -> 𝕋{0} by
-    evenO : even O,
-    evenS : forall (n : Nat), even n -> even (S (S n))
+def even : ∀ i, Nat @i -> 𝕋{i} by
+    evenO : ∀ i even @i (O @i),
+    evenS : ∀ i, forall (n : Nat @i), even @i n -> even @i ((S @i) ((S @i) n))
 
 def (main : 𝕋{1}) = id @2 𝕋{1} 𝕋{0}
 
