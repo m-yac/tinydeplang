@@ -11,7 +11,7 @@ module Utils (
     abstractf, abstract, instantiatef, instantiate,
     subst, substVar, closed, isClosed, fv,
     -- * Other Useful Functions
-    lines_dbl, notNull
+    notNull
 ) where
 
 import Data.Maybe
@@ -164,13 +164,3 @@ fv = toList
 
 notNull :: [a] -> Bool
 notNull = not . null
-
--- | Splits on two line breaks
-lines_dbl :: String -> [String]
-lines_dbl = filter notNull . go []
-    where go accum [] = [accum]
-          go accum (x:xs) = let (ns,rest) = span (== '\n') (x:xs)
-                             in case ns of
-                                    _:_:_ -> accum : (go [] rest)
-                                    _:[] -> go (accum ++ " ") rest
-                                    [] -> go (accum ++ [x]) xs

@@ -13,8 +13,7 @@ module Core.Syntax (
   ULvl(..), mkULvl, mkUSuc, mkUMax, mkUVar, leqU, addU, maxU,
   VarTy(..), Name,
   -- * Parsing and Printing
-  decl, term, interaction, Interaction(..),
-  parseExcept, parseExceptIO, parseRaw, parseOneUnsafe,
+  tokenizeCore, decl, term,
   Pprable(..), ppr, ss, slvl, intercalateS
 ) where
 
@@ -289,6 +288,17 @@ instance Show a => Show     (Decl a) where showsPrec = showsPrec1
 --   PARSING AND PRINTING
 -- ========================
 
+coreTkF :: TkFunction
+coreTkF (':':'=':_) = Split 2
+coreTkF ('𝕋':'{':_) = SplitIsolate 2
+coreTkF ('@':'+':_) = Split 2
+coreTkF (x:_) | x `elem` ":,@𝕋" = Split 1
+coreTkF (x:_) | x `elem` "{}()\"" = SplitIsolate 1
+coreTkF _ = Continue
+
+tokenizeCore :: String -> [Token]
+tokenizeCore = tokenize coreTkF
+
 varparseWild :: String -> Bool
 varparseWild (x:xs) = ( x == '_' && null xs ) || varparse (x:xs)
 varparseWild _      = False
@@ -308,66 +318,66 @@ uvarparse _      = False
 
 declOrTerm :: EarleyPair Decl Term
 declOrTerm = mdo
-  let v    = satisfy varparse
-      vORw = satisfy varparseWild
-      nat = terminal readMaybe
+  let v    = varBy varparse
+      vORw = varBy varparseWild
+      nat = terminalBy readMaybe
       
   let vE    =     v <?> Thing "a variable"
       vORwE = (vORw <?> Thing "a variable") <?> Lit "_"
 
   i0 <- rule $  mkULvl <$> nat
-            <|> mkUVar <$> satisfy uvarparse
-            <|> l "(" *> i1 <* l ")"
+            <|> mkUVar <$> varBy uvarparse
+            <|> l "(" *>wo*> i1 <*wo<* l ")"
 
-  i1 <- rule $  mkUSuc <$> nat <* l " + " <*> ulvl1
-            <|> l "max" *> (mkUMax <$> ulvl0) <*> ulvl0
+  i1 <- rule $  mkUSuc <$> nat <*w<* l "+" <*w<*> ulvl1
+            <|> l "max" *>w*> (mkUMax <$> ulvl0) <*w<*> ulvl0
             <|> i0
   
   let [ulvl0,ulvl1] = (<?> Thing "a universe level") <$> [i0,i1]
 
   x0 <- rule $  mkVar <$> v
-            <|> l "𝕋{" *> (mkUniverse <$> ulvl1) <* lE "}"
-            <|> l "𝕋{ω}" *> pure mkUniverseTop
-            <|> l "(" *> tm2 <* lE ")"
+            <|> l "𝕋{" *>wo*> (mkUniverse <$> ulvl1) <*wo<* lE "}"
+            <|> l "𝕋{" *>wo*> l "ω" *>wo*> l "}" *> pure mkUniverseTop
+            <|> l "(" *>wo*> tm2 <*wo<* lE ")"
   
-  x1 <- rule $      mkApp <$> (x1)          <*> (x0)
-            <|> mkULvlApp <$> (x1) <* l "@" <*> (i0)
-            <|> l "+" *> (mkULift <$> nat) <* lE "(" <*> tm0 <* l ")"
+  x1 <- rule $      mkApp <$> (x1)              <*w<*> (x0)
+            <|> mkULvlApp <$> (x1) <*w<* l "@" <*> (i0)
+            <|> l "@+" *> (mkULift <$> (nat <?> Thing "a number")) <*w<*> (tm0)
             <|> x0
   
   x2 <- rule $  xlam
-            <|> l "forall" *> xfalls
-            <|> l "(" *> (mkFun <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <* lE "->" <*> (ty2)
-            <|>          (mkFun "__")                <$> (ty1)           <* lE "->" <*> (ty2)
-            <|> l "∀" *> (mkULvlFun <$> vE)    <* lE "," <*> (ty2)
-            <|> l "undefined" *> lE ":" *> (mkUndefined <$> ty2)
+            <|> l "forall" *>w*> xfalls
+            <|> l "(" *>wo*> (mkFun <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*w<* lE "->" <*w<*> (ty2)
+            <|>              (mkFun "__")                      <$> (ty1)               <*w<* lE "->" <*w<*> (ty2)
+            <|> l "∀" *>w*> (mkULvlFun <$> vE) <*wo<* lE "," <*wo<*> (ty2)
+            <|> l "undefined" *>w*> lE ":" *>w*> (mkUndefined <$> ty2)
             <|> x1
   
-  xlam <- rule $  l "(" *>     (mkLam <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <*> (xlam)
-              <|> l "(" *>     (mkLam <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <* lE ">->" <*> (tm2)
-              <|> l "(" *> (mkULvlLam <$> vORwE)                     <* lE ")" <*> (xlam)
-              <|> l "(" *> (mkULvlLam <$> vORwE)                     <* lE ")" <* lE ">->" <*> (tm2)
+  xlam <- rule $  l "(" *>wo*>     (mkLam <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*wo<*> (xlam)
+              <|> l "(" *>wo*>     (mkLam <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*wo<* lE ">->" <*w<*> (tm2)
+              <|> l "(" *>wo*> (mkULvlLam <$> vORwE)                           <*wo<* lE ")" <*wo<*> (xlam)
+              <|> l "(" *>wo*> (mkULvlLam <$> vORwE)                           <*wo<* lE ")" <*wo<* lE ">->" <*w<*> (tm2)
   
-  xfalls <- rule $  lE "(" *> (mkFun <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <*> (xfalls)
-                <|> lE "," *> (ty2)
+  xfalls <- rule $  lE "(" *>wo*> (mkFun <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*wo<*> (xfalls)
+                <|> lE "," *>wo*> (ty2)
                 
   let [tm0,tm1,tm2] = (<?> Thing "a term") <$> [x0,x1,x2]
   let [ty0,ty1,ty2] = (<?> Thing "a type") <$> [x0,x1,x2]
   
-  ipair <- rule $ ((,) <$> v) <* lE ":" <*> ty2
+  ipair <- rule $ ((,) <$> v) <*w<* lE ":" <*w<*> ty2
 
-  ipairs <- rule $  ((:) <$> ipair) <* l "," <*> cnstrs
+  ipairs <- rule $  ((:) <$> ipair) <*wo<* l "," <*wo<*> cnstrs
                 <|> ((:[]) <$> ipair)
   
   let sorts  = ipairs <?> Thing "a type or type family declaration"
   let cnstrs = ipairs <?> Thing "a constructor declaration"
   
-  cds <- rule $ cnstrs <|> ((l "(" *> pure [] <* l ")") <?> Lit "()")
+  cds <- rule $ cnstrs <|> ((l "(" *>wo*> pure [] <* l ")") <?> Lit "()")
   
-  d4 <- rule $  lE "def" *> (mkDecl <$> vE) <* lE ":" <*> ty2 <* lE "=" <*> tm2
-            <|> lE "def" *> (mkIndDecl <$> sorts) <* lE "by" <*> cds
+  d4 <- rule $  lE "def" *>w*> (mkDecl <$> vE) <*w<* lE ":" <*w<*> ty2 <*w<* lE ":=" <*w<*> tm2
+            <|> lE "def" *>w*> (mkIndDecl <$> sorts) <*w<* lE "by" <*w<*> cds
   
-  return (d4,x2)
+  return (d4, x2)
 
 decl :: EarleyGrammar Decl
 decl = fst <$> declOrTerm
@@ -375,26 +385,6 @@ decl = fst <$> declOrTerm
 term :: EarleyGrammar Term
 term = snd <$> declOrTerm
 
-data Interaction v = IDecl (Decl v)
-                   | ITerm (Term v)
-                   | ICmnd (String) [String]
-                   deriving (Eq, Show)
-
-interaction :: EarleyGrammar Interaction
-interaction = mdo
-  let cmd  = satisfy (all (\y -> isAlphaNum y || y == '-' || y == '_'))
-      cmdE = cmd <?> Thing "a command"
-  d <- decl
-  t <- term
-  
-  string <- rule $  l "\"" *> satisfy (all (/= '\"')) <* lE "\""
-                <|> satisfy (const True)
-  
-  args <- rule $ (:) <$> string <*> args <|> pure [] 
-  
-  rule $  (IDecl <$> d)
-      <|> (ITerm <$> t)
-      <|> l ":" *> (ICmnd <$> cmdE) <*> args
 
 
 -- Printing:

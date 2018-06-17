@@ -71,8 +71,8 @@ extendCtx xs thing = do
   ctx <- getCtx
   case (getName <$> xs) `intersect` (getName <$> ctx) of
     []  -> local (\ctx -> xs ++ ctx) thing
-    [n] -> throwError $ "[Error] [Internal] Name " ++ n ++ " already defined"
-    ns  -> throwError $ "[Error] [Internal] Names " ++ (intercalate ", " ns) ++ " already defined"
+    [n] -> throwError $ "[Error] Name " ++ n ++ " already defined"
+    ns  -> throwError $ "[Error] Names " ++ (intercalate ", " ns) ++ " already defined"
 
 extendCtxReW ::Ctx v -> WithCtx v a -> WithCtx v a
 extendCtxReW xs = local (unionBy nominallyEq xs)
@@ -103,7 +103,7 @@ lookupTermVarMaybe n = do
 lookupTermVar :: Name -> WithCtx v (Term v, Maybe (Term v))
 lookupTermVar n = do
     x <- lookupTermVarMaybe n
-    maybe (throwError $ "[Error] [Internal] The variable " ++ show n ++ " is not in scope.") return x
+    maybe (throwError $ "[Error] The variable " ++ show n ++ " is not in scope.") return x
 
 lookupULvlVarMaybe :: Name -> WithCtx v (Maybe (Maybe (ULvl v)))
 lookupULvlVarMaybe n = do
@@ -113,5 +113,5 @@ lookupULvlVarMaybe n = do
 lookupULvlVar :: Name -> WithCtx v (Maybe (ULvl v))
 lookupULvlVar n = do 
     x <- lookupULvlVarMaybe n
-    maybe (throwError $ "[Error] [Internal] The variable " ++ show n ++ " is not in scope.") return x
+    maybe (throwError $ "[Error] The variable " ++ show n ++ " is not in scope.") return x
 
