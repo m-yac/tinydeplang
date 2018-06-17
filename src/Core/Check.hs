@@ -78,7 +78,7 @@ check (Fun x tyA scope) = do
         tyB <- check (instantiate [(V,x)] scope)
         mapM ensureIsUniverse tyB
     -- At the very least, we now know ((x : A) -> B) : 𝕋{max i j}
-    return $ (Fun x tyA' (abstract [(x,V)] tyB), Universe (UMax i j))
+    return $ (Fun x tyA' (abstract [(x,V)] tyB), Universe (i `maxU` j))
 
 -- Undefined (Term v)                      -- ^ undefined : A    [Undefined A]
 
@@ -89,7 +89,7 @@ check (Undefined tyA) = do
 -- Universe (ULvl v)                       -- ^ 𝕋{i}             [Universe i]
 
 check (Universe i) = do
-    -- At the very least, we know 𝕋{i} : 𝕋{1 + i}
+    -- We know 𝕋{i} : 𝕋{1 + i}
     return (Universe i, Universe (1 `addU` i))
 
 -- UniverseTop                             -- ^ 𝕋{ω}             [UniverseTop]
@@ -125,6 +125,14 @@ check (ULvlFun i scope) = do
            (throwError $ "[Warning] [Typecheck] Unused universe level quantification: " ++ i ++ " in " ++ ppr tyA)
     -- In either case, (∀ i. A) : 𝕋{ω}
     return $ (ULvlFun i (abstract [(i,I)] tyA), UniverseTop)
+
+-- ULift Natural (Term v)                  -- ^ +n X             [ULift n X]
+
+check (ULift n x) = do
+    -- Ensure that X : 𝕋{i} for some i
+    (x', i) <- mapM ensureIsUniverse =<< check x
+    -- We know +n X : 𝕋{n+i}
+    return $ (ULift n x', Universe (n `addU` i))
 
 
 -- | Given a 'Decl', an returns the decl with a list of all things which must

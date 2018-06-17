@@ -43,6 +43,7 @@ tokenize str = let refine acc ('𝕋':xs) = case xs of '{':'ω':'}':xs' -> (\x -
                    refine acc (',':xs) = (\x -> acc:",":x) <$> refine [] xs
                    refine acc ('@':xs) = (\x -> acc:"@":x) <$> refine [] xs
                    refine acc ('\"':xs) = (\x -> acc:"\"":x) <$> refine [] xs
+                   refine acc ('+':xs) = (\x -> acc:"+":x) <$> refine [] xs -- <- TEMPORARY
                    refine acc (x:xs)   = refine (acc ++ [x]) xs
                    refine acc []       = return [acc]
                 in do refined <- concat <$> mapM (refine []) (words str)
@@ -56,6 +57,7 @@ untokenizeS ("𝕋{":xs) = showString "𝕋{" . untokenizeS xs
 untokenizeS ("{":xs) = showString "{" . untokenizeS xs
 untokenizeS ("(":xs) = showString "(" . untokenizeS xs
 untokenizeS ("@":xs) = showString "@" . untokenizeS xs
+untokenizeS ("+":xs) = showString "+" . untokenizeS xs
 untokenizeS (x:xs) = showString x . showString " " . untokenizeS xs
 untokenizeS [] = id
 -- ^ currently does not support \"-delimited strings!!

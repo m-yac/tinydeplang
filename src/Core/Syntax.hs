@@ -9,8 +9,8 @@ module Core.Syntax (
   -- * The Syntax
   Decl(..), mkDecl,
   Term(..), mkVar, mkApp, mkLam, mkFun, mkUndefined, mkUniverse, mkUniverseTop,
-  mkULvlApp, mkULvlLam, mkULvlFun,
-  ULvl(..), mkULvl, mkUSuc, mkUMax, mkUVar, leqU, addU,
+  mkULvlApp, mkULvlLam, mkULvlFun, mkULift,
+  ULvl(..), mkULvl, mkUSuc, mkUMax, mkUVar, leqU, addU, maxU,
   VarTy(..), Name,
   -- * Parsing and Printing
   decl, term, interaction, Interaction(..),
@@ -61,6 +61,7 @@ data Term v = Var v                                   -- ^ x                [Var
             | ULvlApp (Term v) (ULvl v)               -- ^ X i              [ULvlApp X i]
             | ULvlLam Name (Scope VarTy Term v)       -- ^ i >-> A          [ULvlLam i (i. A)]
             | ULvlFun Name (Scope VarTy Term v)       -- ^ ∀ i. A           [ULvlLam i (i. A)]
+            | ULift Natural (Term v)                  -- ^ +n X             [ULift n X]
 
 data ULvl v = ULvl Natural                            -- ^ n                [ULvl n]
             | USuc Natural (ULvl v)                   -- ^ n + i            [USuc n i]
@@ -105,6 +106,8 @@ mkULvlLam i body = ULvlLam i (abstract [(i,I)] body)
 mkULvlFun :: Name -> Term Name -> Term Name
 mkULvlFun i tyA = ULvlFun i (abstract [(i,I)] tyA)
 
+mkULift = ULift
+
 mkULvl = ULvl
 mkUSuc = USuc
 mkUMax = UMax
@@ -123,13 +126,26 @@ leqU _ _                   = Nothing
 
 -- | @n `addU' i@ adds @n@ to @i@ in the smallest way possible. For example,
 --   @n `addU' (USuc m j) = USuc (n+m) j@. 
+--   If @i@ is in normal form, the result will be as well.
 addU :: Natural -> ULvl v -> ULvl v
 addU n (ULvl m)   = ULvl (n+m)
 addU n (USuc m j) = USuc (n+m) j
+addU 0 j          = j
 addU n j          = USuc n j
 
-
-
+-- | @i `maxU' j@ takes the max of @i@ and @j@ in the smallest way possible
+--   If @i@ and $j$ are in normal form, the result will be as well.
+maxU :: ULvl v -> ULvl v -> ULvl v
+maxU (ULvl n)   (ULvl m)   = ULvl (max n m)
+maxU (ULvl n)   (USuc m i) = if n <= m then USuc m i
+                                       else USuc m (UMax (ULvl (n-m)) i)
+maxU (USuc n i) (ULvl m)   = if n >= m then USuc n i
+                                       else USuc n (UMax i (ULvl (m-n)))
+maxU (USuc n i) (USuc m j) = if n <= m then USuc n (UMax i (ULvl (m-n)))
+                                       else USuc m (UMax (ULvl (n-m)) i)
+maxU (ULvl 0)   j          = j
+maxU i          (ULvl 0)   = i
+maxU i          j          = UMax i j
 
 
 -- =============
@@ -153,6 +169,7 @@ instance Functor Term where
     fmap f (ULvlApp x i)        = ULvlApp (f <$> x) (f <$> i)
     fmap f (ULvlLam n scope)    = ULvlLam n (f <$> scope)
     fmap f (ULvlFun n scope)    = ULvlFun n (f <$> scope)
+    fmap f (ULift n x)          = ULift n (f <$> x)
 
 -- Encoding where our variables live:
 instance Boxed ULvl where
@@ -177,6 +194,7 @@ instance Subst Term Term where
     (ULvlApp x i) *>>= f        = ULvlApp (x *>>= f) i
     (ULvlLam n scope) *>>= f    = ULvlLam n (scope *>>= f)
     (ULvlFun n scope) *>>= f    = ULvlFun n (scope *>>= f)
+    (ULift n x) *>>= f          = ULift n (x *>>= f)
 instance Subst Term ULvl where
     (Var v) *>>= f              = Var v
     (App x y) *>>= f            = App (x *>>= f) (y *>>= f)
@@ -188,6 +206,7 @@ instance Subst Term ULvl where
     (ULvlApp x i) *>>= f        = ULvlApp (x *>>= f) (i *>>= f)
     (ULvlLam n scope) *>>= f    = ULvlLam n (scope *>>= f)
     (ULvlFun n scope) *>>= f    = ULvlFun n (scope *>>= f)
+    (ULift n x) *>>= f          = ULift n (x *>>= f)
 
 -- Encoding alpha-equivalence:
 instance Eq1 ULvl where
@@ -208,6 +227,7 @@ instance Eq1 Term where
     liftEq r (ULvlApp x i) (ULvlApp y j)           = liftEq r x y && liftEq r i j
     liftEq r (ULvlLam _ scope) (ULvlLam _ scope')  = liftEq r scope scope'
     liftEq r (ULvlFun _ scope) (ULvlFun _ scope')  = liftEq r scope scope'
+    liftEq r (ULift n x) (ULift n' x')             = n == n' && liftEq r x x'
     liftEq _ _ _                                   = False
 instance Eq1 Decl where
     liftEq r (Decl _ tyA rhs) (Decl _ tyB rhs')    = liftEq r tyA tyB && liftEq r rhs rhs'
@@ -231,6 +251,7 @@ instance Foldable Term where
     foldMap f (ULvlApp x i)        = foldMap f x `mappend` foldMap f i
     foldMap f (ULvlLam _ scope)    = foldMap f scope
     foldMap f (ULvlFun _ scope)    = foldMap f scope
+    foldMap f (ULift _ x)          = foldMap f x
 instance Traversable ULvl where
     traverse f (ULvl n)             = pure $ ULvl n
     traverse f (USuc n i)           = USuc n <$> traverse f i
@@ -247,6 +268,7 @@ instance Traversable Term where
     traverse f (ULvlApp x y)        = ULvlApp <$> traverse f x <*> traverse f y
     traverse f (ULvlLam n scope)    = ULvlLam n <$> traverse f scope
     traverse f (ULvlFun n scope)    = ULvlFun n <$> traverse f scope
+    traverse f (ULift n x)          = ULift n <$> traverse f x
 
 deriveShow1 ''ULvl
 deriveShow1 ''Term
@@ -310,6 +332,7 @@ declOrTerm = mdo
   
   x1 <- rule $      mkApp <$> (x1)          <*> (x0)
             <|> mkULvlApp <$> (x1) <* l "@" <*> (i0)
+            <|> l "+" *> (mkULift <$> nat) <* lE "(" <*> tm0 <* l ")"
             <|> x0
   
   x2 <- rule $  xlam

@@ -20,27 +20,14 @@ evalU (ULvl n) = return $ ULvl n
 
 evalU (USuc n i) = do
     i' <- evalU i
-    return $ case i' of
-      (ULvl m)   -> ULvl (n + m)
-      (USuc m i) -> USuc (n + m) i'
-      _          -> if n == 0 then i' else USuc n i'
+    return (n `addU` i')
 
 -- UMax (ULvl v) (ULvl v)                    -- ^ max i j           [UMax i j]
 
 evalU (UMax i j) = do
     i' <- evalU i
     j' <- evalU j
-    return $ case (i',j') of
-      ((ULvl n)  , (ULvl m)  ) -> ULvl (max n m)
-      ((ULvl n)  , (USuc m i)) -> if n <= m then USuc m i
-                                            else USuc m (UMax (ULvl (n-m)) i)
-      ((USuc n i), (ULvl m)  ) -> if n >= m then USuc n i
-                                            else USuc n (UMax i (ULvl (m-n)))
-      ((USuc n i), (USuc m j)) -> if n <= m then USuc n (UMax i (ULvl (m-n)))
-                                            else USuc m (UMax (ULvl (n-m)) i)
-      ((ULvl 0)  , j         ) -> j
-      (i         , (ULvl 0)  ) -> i
-      (i         , j         ) -> UMax i j
+    return (i' `maxU` j')
 
 -- UVar v                                    -- ^ i                 [UVar i]
 
@@ -96,7 +83,7 @@ eval k (Lam x tyA scope) = do
 -- Universe (Ulvl v)                       -- ^ 𝕋{i}             [Universe i]
 
 eval k (Universe i) = do
-    -- ULvls always eagerly evaluate
+    -- Always eagerly evaluate i
     Universe <$> evalU i
 
 -- ULvlApp (Term v) (ULvl v)               -- ^ X i              [ULvlApp X i]
@@ -104,9 +91,8 @@ eval k (Universe i) = do
 eval k (ULvlApp x i) = do
     -- Evaluate x
     x' <- eval k x
-    -- Only evaluate i if we're going for normal form
-    i' <- case k of WHNF -> return i
-                    NF   -> evalU i
+    -- Always eagerly evaluate i
+    i' <- evalU i
     case x' of
         -- If x ≡ j >-> X, the result is X[i/j]
         ULvlLam j scope -> eval k $ subst j i' (instantiate [(I,j)] scope)
@@ -127,6 +113,7 @@ eval k (ULvlLam i scope) = do
 -- Undefined (Term v)                      -- ^ undefined : A    [Undefined A]
 -- UniverseTop                             -- ^ 𝕋{ω}             [UniverseTop]
 -- ULvlFun Name (Scope VarTy Term v)       -- ^ ∀ i. A           [ULvlLam i (i. A)]
+-- ULift Natural (Term v)                  -- ^ +n X             [ULift n X]
 
 eval k x = return x
 
