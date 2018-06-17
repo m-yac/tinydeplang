@@ -12,12 +12,10 @@ module Core.Syntax (
   mkULvlApp, mkULvlLam, mkULvlFun,
   ULvl(..), mkULvl, mkUSuc, mkUMax, mkUVar, leqU, addU,
   VarTy(..), Name,
-  -- ** Inductive types
-  IndType(..), TypeCon(..), TypeCons(..),
   -- * Parsing and Printing
   decl, term, interaction, Interaction(..),
   parseExcept, parseExceptIO, parseRaw, parseOneUnsafe,
-  Pprable(..), ppr, ss, slvl
+  Pprable(..), ppr, ss, slvl, intercalateS
 ) where
 
 import Control.Applicative
@@ -50,11 +48,9 @@ import Parser
 --       TypeCons are c or p
 
 data Decl v = Decl Name (Term v) (Term v)             -- ^ def x : A = X    [Decl "x" A X]
-            | TypeDecl (IndType v)                    -- ^ def T : A by ..  [TypeDecl (IndType "T" A ..)]
+            | IndDecl [(Name,Term v)] [(Name,Term v)] -- ^ def T : A by ..  [IndDecl ..]
 
 data Term v = Var v                                   -- ^ x                [Var x]
-         -- | IndTypeName IndName                     -- ^ T                [IndTypeName "T"]
-         -- | ConName IndName                         -- ^ c                [ConName "c"]
          -- | Induction IndName                       -- ^ induction T      [Induction "T"]
             | App (Term v) (Term v)                   -- ^ X Y              [App X Y]
             | Lam Name (Term v) (Scope VarTy Term v)  -- ^ (x : A) >-> X    [Lam "x" A (x. X)]
@@ -71,18 +67,10 @@ data ULvl v = ULvl Natural                            -- ^ n                [ULv
             | UMax (ULvl v) (ULvl v)                  -- ^ max i j          [UMax i j]
             | UVar v                                  -- ^ i                [UVar i]
 
--- Inductive Types:
-
-data IndType v = IndType Name (Term v) (Scope T TypeCons v) -- ^ T : A -> 𝕋 by ..  [IndType "T" (A -> 𝕋) ..]
-data TypeCon v = Con Name (Term v)                          -- ^ x : A             [Con "x" (T. A)]
-               | IdCon Name (Term v) (Term v)               -- ^ p : X = Y         [PathCon "p" X Y]
-newtype TypeCons v = TypeCons { unTypeCons :: [TypeCon v] }
-
-data VarTy = V | I deriving (Eq, Ord, Read, Show)
-data T     = T     deriving (Eq, Ord, Read, Show)
 
 type Name = String
-type IndName = String
+
+data VarTy = V | I deriving (Eq, Ord, Read, Show)
 
 
 
@@ -94,8 +82,8 @@ type IndName = String
 
 mkDecl = Decl
 
-mkTypeDecl :: Name -> Term Name -> [TypeCon Name] -> Decl Name
-mkTypeDecl x ty cs = TypeDecl (IndType x ty (abstract [(x,T)] (TypeCons cs)))
+mkIndDecl :: [(Name, Term Name)] -> [(Name, Term Name)] -> Decl Name
+mkIndDecl ts cs = IndDecl ts cs
 
 mkVar = Var
 mkApp = App
@@ -165,14 +153,6 @@ instance Functor Term where
     fmap f (ULvlApp x i)        = ULvlApp (f <$> x) (f <$> i)
     fmap f (ULvlLam n scope)    = ULvlLam n (f <$> scope)
     fmap f (ULvlFun n scope)    = ULvlFun n (f <$> scope)
-instance Functor IndType where
-    fmap f (IndType n ty cs)    = IndType n (f <$> ty) (f <$> cs)
-instance Functor TypeCons where
-    fmap f (TypeCons (c:cs))    = TypeCons ((f <$> c) : unTypeCons (f <$> TypeCons cs))
-    fmap f (TypeCons [])        = TypeCons []
-instance Functor TypeCon where
-    fmap f (Con n ty)           = Con n (f <$> ty)
-    fmap f (IdCon n tyA tyB)    = IdCon n (f <$> tyA) (f <$> tyB)
 
 -- Encoding where our variables live:
 instance Boxed ULvl where
@@ -208,14 +188,6 @@ instance Subst Term ULvl where
     (ULvlApp x i) *>>= f        = ULvlApp (x *>>= f) (i *>>= f)
     (ULvlLam n scope) *>>= f    = ULvlLam n (scope *>>= f)
     (ULvlFun n scope) *>>= f    = ULvlFun n (scope *>>= f)
-instance Subst IndType Term where
-    (IndType n ty cs) *>>= f    = IndType n (ty *>>= f) (cs *>>= f)
-instance Subst TypeCons Term where
-    (TypeCons (c:cs)) *>>= f    = TypeCons ((c *>>= f) : unTypeCons (TypeCons cs *>>= f))
-    (TypeCons []) *>>= f        = TypeCons []
-instance Subst TypeCon Term where
-    (Con n ty) *>>= f           = Con n (ty *>>= f)
-    (IdCon n tyA tyB) *>>= f    = IdCon n (tyA *>>= f) (tyB *>>= f)
 
 -- Encoding alpha-equivalence:
 instance Eq1 ULvl where
@@ -238,19 +210,9 @@ instance Eq1 Term where
     liftEq r (ULvlFun _ scope) (ULvlFun _ scope')  = liftEq r scope scope'
     liftEq _ _ _                                   = False
 instance Eq1 Decl where
-    liftEq r (Decl _ t x)  (Decl _ t' x')           = liftEq r t t' && liftEq r x x'
-    liftEq r (TypeDecl it) (TypeDecl it')           = liftEq r it it'
-    liftEq _ _ _                                    = False
-instance Eq1 IndType where
-    liftEq r (IndType _ t cs) (IndType _ t' cs')    = liftEq r t t' && liftEq r cs cs'
-instance Eq1 TypeCons where
-    liftEq r (TypeCons (c:cs)) (TypeCons (c':cs'))  = liftEq r c c' && liftEq r (TypeCons cs) (TypeCons cs')
-    liftEq r (TypeCons [])     (TypeCons [])        = True
-    liftEq _ _ _                                    = False
-instance Eq1 TypeCon where
-    liftEq r (Con _ t)         (Con _ t')           = liftEq r t t'
-    liftEq r (IdCon _ tyA tyB) (IdCon _ tyA' tyB')  = liftEq r tyA tyA' && liftEq r tyB tyB'
-    liftEq _ _ _                                    = False
+    liftEq r (Decl _ tyA rhs) (Decl _ tyB rhs')    = liftEq r tyA tyB && liftEq r rhs rhs'
+    liftEq r (IndDecl ts cs) (IndDecl ts' cs')     = and (zipWith (\(_,tyA) (_,tyB) -> liftEq r tyA tyB) ts ts') &&
+                                                     and (zipWith (\(_,tyA) (_,tyB) -> liftEq r tyA tyB) cs cs')
 
 -- Useful for reasoning about free variables:
 instance Foldable ULvl where
@@ -289,23 +251,14 @@ instance Traversable Term where
 deriveShow1 ''ULvl
 deriveShow1 ''Term
 deriveShow1 ''Decl
-deriveShow1 ''IndType
-deriveShow1 ''TypeCons
-deriveShow1 ''TypeCon
 
 -- Make standard Eq and Show instances from Eq1 and Show1:
 instance   Eq a =>   Eq     (ULvl a) where      (==) = eq1
 instance   Eq a =>   Eq     (Term a) where      (==) = eq1
 instance   Eq a =>   Eq     (Decl a) where      (==) = eq1
-instance   Eq a =>   Eq  (IndType a) where      (==) = eq1
-instance   Eq a =>   Eq (TypeCons a) where      (==) = eq1
-instance   Eq a =>   Eq  (TypeCon a) where      (==) = eq1
 instance Show a => Show     (ULvl a) where showsPrec = showsPrec1
 instance Show a => Show     (Term a) where showsPrec = showsPrec1
 instance Show a => Show     (Decl a) where showsPrec = showsPrec1
-instance Show a => Show  (IndType a) where showsPrec = showsPrec1
-instance Show a => Show (TypeCons a) where showsPrec = showsPrec1
-instance Show a => Show  (TypeCon a) where showsPrec = showsPrec1
 
 
 
@@ -340,23 +293,23 @@ declOrTerm = mdo
   let vE    =     v <?> Thing "a variable"
       vORwE = (vORw <?> Thing "a variable") <?> Lit "_"
 
-  i0 <- rule $  ULvl <$> nat
-            <|> UVar <$> satisfy uvarparse
+  i0 <- rule $  mkULvl <$> nat
+            <|> mkUVar <$> satisfy uvarparse
             <|> l "(" *> i1 <* l ")"
 
-  i1 <- rule $  USuc <$> nat <* l " + " <*> ulvl1
-            <|> l "max" *> (UMax <$> ulvl0) <*> ulvl0
+  i1 <- rule $  mkUSuc <$> nat <* l " + " <*> ulvl1
+            <|> l "max" *> (mkUMax <$> ulvl0) <*> ulvl0
             <|> i0
   
   let [ulvl0,ulvl1] = (<?> Thing "a universe level") <$> [i0,i1]
 
-  x0 <- rule $  Var <$> v
-            <|> l "𝕋{" *> (Universe <$> ulvl1) <* lE "}"
-            <|> l "𝕋{ω}" *> pure UniverseTop
+  x0 <- rule $  mkVar <$> v
+            <|> l "𝕋{" *> (mkUniverse <$> ulvl1) <* lE "}"
+            <|> l "𝕋{ω}" *> pure mkUniverseTop
             <|> l "(" *> tm2 <* lE ")"
   
-  x1 <- rule $      App <$> (x1)          <*> (x0)
-            <|> ULvlApp <$> (x1) <* l "@" <*> (i0)
+  x1 <- rule $      mkApp <$> (x1)          <*> (x0)
+            <|> mkULvlApp <$> (x1) <* l "@" <*> (i0)
             <|> x0
   
   x2 <- rule $  xlam
@@ -364,7 +317,7 @@ declOrTerm = mdo
             <|> l "(" *> (mkFun <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <* lE "->" <*> (ty2)
             <|>          (mkFun "__")                <$> (ty1)           <* lE "->" <*> (ty2)
             <|> l "∀" *> (mkULvlFun <$> vE)    <* lE "," <*> (ty2)
-            <|> l "undefined" *> lE ":" *> (Undefined <$> ty2)
+            <|> l "undefined" *> lE ":" *> (mkUndefined <$> ty2)
             <|> x1
   
   xlam <- rule $  l "(" *>     (mkLam <$> vORwE) <* lE ":" <*> (ty2) <* lE ")" <*> (xlam)
@@ -378,20 +331,18 @@ declOrTerm = mdo
   let [tm0,tm1,tm2] = (<?> Thing "a term") <$> [x0,x1,x2]
   let [ty0,ty1,ty2] = (<?> Thing "a type") <$> [x0,x1,x2]
   
-  c <- rule $  l "(" *> (Con <$> v) <* lE ":" <*> ty2 <* lE ")"
-           <|>          (Con <$> v) <* lE ":" <*> ty2
+  ipair <- rule $ ((,) <$> v) <* lE ":" <*> ty2
 
-  cs <- rule $  ((:) <$> c) <* l "," <*> cnstrs
-            <|> ((:[]) <$> c)
+  ipairs <- rule $  ((:) <$> ipair) <* l "," <*> cnstrs
+                <|> ((:[]) <$> ipair)
   
-  let cnstrs = cs <?> Thing "a constructor declaration"
+  let sorts  = ipairs <?> Thing "a type or type family declaration"
+  let cnstrs = ipairs <?> Thing "a constructor declaration"
   
-  cds <- rule $ cnstrs <|> lE "(" *> pure [] <* lE ")"
+  cds <- rule $ cnstrs <|> ((l "(" *> pure [] <* l ")") <?> Lit "()")
   
-  d4 <- rule $  lE "def" *> l "(" *>       (Decl <$> vE) <* lE ":" <*> ty2 <* lE ")" <* lE "=" <*> tm2
-            <|> lE "def" *>                (Decl <$> vE) <* lE ":" <*> ty2 <*           lE "=" <*> tm2
-            <|> lE "def" *> l "(" *> (mkTypeDecl <$> vE) <* lE ":" <*> ty2 <* lE ")" <* lE "by" <*> cds
-            <|> lE "def" *>          (mkTypeDecl <$> vE) <* lE ":" <*> ty2 <*           lE "by" <*> cds
+  d4 <- rule $  lE "def" *> (mkDecl <$> vE) <* lE ":" <*> ty2 <* lE "=" <*> tm2
+            <|> lE "def" *> (mkIndDecl <$> sorts) <* lE "by" <*> cds
   
   return (d4,x2)
 
@@ -437,6 +388,12 @@ ss = showString
 slvl :: Int -> (Int, ShowS) -> ShowS
 slvl i (lvl, str) = if lvl > i then ss "(" . str . ss ")" else str
 
+intercalateS :: ShowS -> [ShowS] -> ShowS
+intercalateS _ [] = id
+intercalateS sep (x:xs) = x . go xs
+  where go []     = id
+        go (x:xs) = sep . x . go xs
+
 instance Pprable ULvl where
     pprS (UVar v)    = (0, ss v)
     pprS (ULvl n)    = (0, ss (show n))
@@ -465,28 +422,7 @@ instance Pprable Term where
 instance Pprable Decl where
     pprS (Decl n ty defn)
       = (4, ss "def " . ss n . ss " : " . slvl 2 (pprS ty) . ss "\n" . ss (replicate (5 + length n) ' ') . ss "= " . slvl 2 (pprS defn))
-    pprS (TypeDecl it)
-      = (4, ss "def " . snd (pprS it))
-
-instance Pprable IndType where
-    pprS (IndType n ty scope)
-      = (4, ss n . ss " : " . slvl 2 (pprS ty) . ss " by" . (if null (unTypeCons cs) then ss " ()" else snd (pprS cs)))
-      where cs = instantiate [(T,n)] scope
-
-pprS_TypeConsTail :: [TypeCon String] -> (Int, ShowS)
-pprS_TypeConsTail (c:cs) = (4, ss ",\n    " . snd (pprS c) . snd (pprS_TypeConsTail cs))
-pprS_TypeConsTail []     = (4, id)
-
-instance Pprable TypeCons where
-    pprS (TypeCons (c:cs)) = (4, ss "\n    " . snd (pprS c) . snd (pprS_TypeConsTail cs))
-    pprS (TypeCons [])     = (4, id)
-
-instance Pprable TypeCon where
-    pprS (Con n ty) = (4, ss n . ss " : " . slvl 2 (pprS ty))
-    pprS (IdCon n tyA tyB) = (4, ss n . ss " : " . slvl 1 (pprS tyA) . ss " = " . slvl 1 (pprS tyB))
-
-instance Pprable Interaction where
-    pprS (IDecl d) = pprS d
-    pprS (ITerm t) = pprS t
-    pprS (ICmnd cmd args) = (4, ss ":" . ss cmd . ss (if notNull args then " " else "") 
-                                       . ss (intercalate " " args))
+    pprS (IndDecl ts cs)
+      = (4, ss "def " . intercalateS (ss ",\n    ") (fmap (\(n,ty) -> ss n . ss " : " . slvl 2 (pprS ty)) ts)
+                      . (if null cs then ss " by ()" else ss " by\n    ")
+                      . intercalateS (ss ",\n    ") (fmap (\(n,ty) -> ss n . ss " : " . slvl 2 (pprS ty)) ts))

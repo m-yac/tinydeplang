@@ -7,7 +7,7 @@ module Utils (
     ExceptM(..), StrExcept, addWarning,
     -- * Custom Unbound
     Boxed(..), Subst(..),
-    Bnd.Var, Scope(..),
+    Bnd.Var(..), Scope(..),
     abstractf, abstract, instantiatef, instantiate,
     subst, substVar, closed, isClosed, fv,
     -- * Other Useful Functions

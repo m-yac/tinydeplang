@@ -22,6 +22,8 @@ import Core.Syntax
 
 data CtxElement v = TermVar Name (Term v) (Maybe (Term v))
                   | ULvlVar Name (Maybe (ULvl v))
+                  -- | IndName (IndType v)
+                  -- | ConName ConName IndName
 
 getName :: CtxElement v -> Name
 getName (TermVar x _ _) = x
