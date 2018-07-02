@@ -292,8 +292,8 @@ coreTkF :: TkFunction
 coreTkF (':':'=':_) = Split 2
 coreTkF ('𝕋':'{':_) = SplitIsolate 2
 coreTkF ('@':'+':_) = Split 2
-coreTkF (x:_) | x `elem` ":,@𝕋" = Split 1
-coreTkF (x:_) | x `elem` "{}()\"" = SplitIsolate 1
+coreTkF (x:_) | x `elem` ":@𝕋\"" = Split 1
+coreTkF (x:_) | x `elem` "{}()," = SplitIsolate 1
 coreTkF _ = Continue
 
 tokenizeCore :: String -> [Token]
@@ -327,7 +327,7 @@ declOrTerm = mdo
 
   i0 <- rule $  mkULvl <$> nat
             <|> mkUVar <$> varBy uvarparse
-            <|> l "(" *>wo*> i1 <*wo<* l ")"
+            <|> l "(" *>w*> i1 <*w<* l ")"
 
   i1 <- rule $  mkUSuc <$> nat <*w<* l "+" <*w<*> ulvl1
             <|> l "max" *>w*> (mkUMax <$> ulvl0) <*w<*> ulvl0
@@ -336,9 +336,9 @@ declOrTerm = mdo
   let [ulvl0,ulvl1] = (<?> Thing "a universe level") <$> [i0,i1]
 
   x0 <- rule $  mkVar <$> v
-            <|> l "𝕋{" *>wo*> (mkUniverse <$> ulvl1) <*wo<* lE "}"
-            <|> l "𝕋{" *>wo*> l "ω" *>wo*> l "}" *> pure mkUniverseTop
-            <|> l "(" *>wo*> tm2 <*wo<* lE ")"
+            <|> l "𝕋{" *>w*> (mkUniverse <$> ulvl1) <*w<* lE "}"
+            <|> l "𝕋{" *>w*> l "ω" *>w*> l "}" *> pure mkUniverseTop
+            <|> l "(" *>w*> tm2 <*w<* lE ")"
   
   x1 <- rule $      mkApp <$> (x1)              <*w<*> (x0)
             <|> mkULvlApp <$> (x1) <*w<* l "@" <*> (i0)
@@ -347,32 +347,32 @@ declOrTerm = mdo
   
   x2 <- rule $  xlam
             <|> l "forall" *>w*> xfalls
-            <|> l "(" *>wo*> (mkFun <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*w<* lE "->" <*w<*> (ty2)
+            <|> l "(" *>w*> (mkFun <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*w<* lE ")" <*w<* lE "->" <*w<*> (ty2)
             <|>              (mkFun "__")                      <$> (ty1)               <*w<* lE "->" <*w<*> (ty2)
-            <|> l "∀" *>w*> (mkULvlFun <$> vE) <*wo<* lE "," <*wo<*> (ty2)
+            <|> l "∀" *>w*> (mkULvlFun <$> vE) <*w<* lE "," <*w<*> (ty2)
             <|> l "undefined" *>w*> lE ":" *>w*> (mkUndefined <$> ty2)
             <|> x1
   
-  xlam <- rule $  l "(" *>wo*>     (mkLam <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*wo<*> (xlam)
-              <|> l "(" *>wo*>     (mkLam <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*wo<* lE ">->" <*w<*> (tm2)
-              <|> l "(" *>wo*> (mkULvlLam <$> vORwE)                           <*wo<* lE ")" <*wo<*> (xlam)
-              <|> l "(" *>wo*> (mkULvlLam <$> vORwE)                           <*wo<* lE ")" <*wo<* lE ">->" <*w<*> (tm2)
+  xlam <- rule $  l "(" *>w*>     (mkLam <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*w<* lE ")" <*w<*> (xlam)
+              <|> l "(" *>w*>     (mkLam <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*w<* lE ")" <*w<* lE ">->" <*w<*> (tm2)
+              <|> l "(" *>w*> (mkULvlLam <$> vORwE)                           <*w<* lE ")" <*w<*> (xlam)
+              <|> l "(" *>w*> (mkULvlLam <$> vORwE)                           <*w<* lE ")" <*w<* lE ">->" <*w<*> (tm2)
   
-  xfalls <- rule $  lE "(" *>wo*> (mkFun <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*wo<* lE ")" <*wo<*> (xfalls)
-                <|> lE "," *>wo*> (ty2)
+  xfalls <- rule $  lE "(" *>w*> (mkFun <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*w<* lE ")" <*w<*> (xfalls)
+                <|> lE "," *>w*> (ty2)
                 
   let [tm0,tm1,tm2] = (<?> Thing "a term") <$> [x0,x1,x2]
   let [ty0,ty1,ty2] = (<?> Thing "a type") <$> [x0,x1,x2]
   
   ipair <- rule $ ((,) <$> v) <*w<* lE ":" <*w<*> ty2
 
-  ipairs <- rule $  ((:) <$> ipair) <*wo<* l "," <*wo<*> cnstrs
+  ipairs <- rule $  ((:) <$> ipair) <*w<* l "," <*w<*> cnstrs
                 <|> ((:[]) <$> ipair)
   
   let sorts  = ipairs <?> Thing "a type or type family declaration"
   let cnstrs = ipairs <?> Thing "a constructor declaration"
   
-  cds <- rule $ cnstrs <|> ((l "(" *>wo*> pure [] <* l ")") <?> Lit "()")
+  cds <- rule $ cnstrs <|> ((l "(" *>w*> pure [] <* l ")") <?> Lit "()")
   
   d4 <- rule $  lE "def" *>w*> (mkDecl <$> vE) <*w<* lE ":" <*w<*> ty2 <*w<* lE ":=" <*w<*> tm2
             <|> lE "def" *>w*> (mkIndDecl <$> sorts) <*w<* lE "by" <*w<*> cds
@@ -434,8 +434,8 @@ instance Pprable Term where
 
 instance Pprable Decl where
     pprS (Decl n ty defn)
-      = (4, ss "def " . ss n . ss " : " . slvl 2 (pprS ty) . ss "\n" . ss (replicate (5 + length n) ' ') . ss "= " . slvl 2 (pprS defn))
+      = (4, ss "def " . ss n . ss " : " . slvl 2 (pprS ty) . ss "\n" . ss (replicate (5 + length n) ' ') . ss ":= " . slvl 2 (pprS defn))
     pprS (IndDecl ts cs)
       = (4, ss "def " . intercalateS (ss ",\n    ") (fmap (\(n,ty) -> ss n . ss " : " . slvl 2 (pprS ty)) ts)
                       . (if null cs then ss " by ()" else ss " by\n    ")
-                      . intercalateS (ss ",\n    ") (fmap (\(n,ty) -> ss n . ss " : " . slvl 2 (pprS ty)) ts))
+                      . intercalateS (ss ",\n    ") (fmap (\(n,ty) -> ss n . ss " : " . slvl 2 (pprS ty)) cs))

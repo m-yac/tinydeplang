@@ -8,7 +8,7 @@
 module Parser (
     -- * Parsing
     ParseExpect(..), flattenExpected,
-    EarleyGrammar, EarleyPair, l, lE, w, wo, dnl, varBy, terminalBy,
+    EarleyGrammar, EarleyPair, l, lE, w, dnl, varBy, terminalBy,
     parseExcept, parseExceptIO, parseRaw, parseOneUnsafe,
     -- ** Exported from the Earley Haskell library
     rule, satisfy, terminal, (<?>),
@@ -153,6 +153,10 @@ split_special f = filter (all notNull) . go []
 concat_whitespace :: [Token] -> [Token]
 concat_whitespace ((Whitespace s1):(Whitespace s2):xs)
     = concat_whitespace ((Whitespace (s1++s2)):xs)
+concat_whitespace ((Whitespace _):(MultiNewLine s):xs)
+    = concat_whitespace ((MultiNewLine s):xs)
+concat_whitespace ((MultiNewLine s):(Whitespace _):xs)
+    = concat_whitespace ((MultiNewLine s):xs)
 concat_whitespace ((MultiNewLine s1):(MultiNewLine s2):xs) -- just to be safe
     = concat_whitespace ((MultiNewLine (s1++s2)):xs)
 concat_whitespace (x:xs) = x : concat_whitespace xs
@@ -201,13 +205,10 @@ l = token . Str
 lE :: String -> EarleyProd r Token
 lE s = l s <?> Lit s
 
--- | Shorthand for any nonzero ammount of whitespace
+-- | Shorthand for any ammount of whitespace
+--   Note that this will detect the invisible whitespace left by SplitIsolate
 w :: EarleyProd r Token
 w = satisfy isWhitespace
-
--- | Shorthand for either whitespace or nothing
-wo :: EarleyProd r (Maybe Token)
-wo = optional w
 
 -- | Shorthand for a multi-newline
 dnl :: EarleyProd r Token
