@@ -2,7 +2,6 @@
 
 module Core.Check where
 
-import Debug.Trace
 import Control.Monad
 import Data.Either
 
@@ -22,7 +21,7 @@ resolveAmbig :: Show (t Name) => (t Name -> WithCtx Name b) -> [t Name] -> WithC
 resolveAmbig f ts = do
     ctx <- getCtx
     case partitionEithers $ fmap (runWithCtx ctx . f) ts of
-        ([],[]) -> error "empty list passed to \'resolveAmbig\'"
+        ([],[]) -> throwError $ "no possible readings found"
         -- the 'no survivors' but 'single error' case:
         ([err],[]) -> throwError err
         -- the 'no survivors' but 'multiple errors' (i.e. worst) case:

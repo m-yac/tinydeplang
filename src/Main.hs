@@ -2,40 +2,39 @@
 
 module Main where
 
-import System.IO
 import System.Environment
 import Control.Applicative
 import Data.Char
 import Data.List
 
-import Utils
 import Parser
 import Core.Syntax
 import Core.Context
 import Core.Eval
 import Core.Check
 
-putStrFlush :: String -> IO ()
-putStrFlush s = putStr s >> hFlush stdout
+import System.Console.Haskeline
+import Control.Monad.Trans
+import Data.Maybe
 
-loadFile :: String -> IO (Maybe (Ctx Name, [Decl Name]))
+loadFile :: String -> InputT IO (Maybe (Ctx Name, [Decl Name]))
 loadFile filename = do
-    file <- readFile filename
-    decls <- mapM (parseExceptIO decl) (separateLines $ tokenizeCore file)
+    file <- lift $ readFile filename
+    decls <- mapM (parseExceptM outputStrLn decl) (separateLines $ tokenizeCore file)
     if null `any` decls then return Nothing
     else case runWithEmptyCtx (checkFile decls) of
-           Left err -> putStrLn err >> return Nothing
+           Left err -> outputStrLn err >> return Nothing
            Right (ctx, declsUnamb) -> return (Just (ctx, declsUnamb))
 
-runFile :: String -> IO ()
+runFile :: String -> InputT IO ()
 runFile filename = loadFile filename >>= \case
     Nothing -> return ()
     Just (ctx, declsUnamb) -> do
-      putStrLn $ intercalate "\n\n" (reverse (ppr <$> declsUnamb))
+      outputStrLn $ intercalate "\n\n" (reverse (ppr <$> declsUnamb))
       let (TermVar _ _ (Just mainBody)) = head $ filter ((== "main") . getName) ctx
       case runWithCtx ctx (eval NF mainBody) of
-        Left err -> putStrLn err
-        Right mainNF -> putStrLn $ "\nmain = " ++ ppr mainNF
+        Left err -> outputStrLn err
+        Right mainNF -> outputStrLn $ "\nmain = " ++ ppr mainNF
 
 data Interaction v = IDecl (Decl v)
                    | ITerm (Term v)
@@ -57,46 +56,43 @@ interaction = mdo
        <|> l ":" *> (ICmnd <$> cmdE) <*> pure [] 
        <|> l ":" *> (ICmnd <$> cmdE) <*w<*> args
 
-interactive :: Ctx Name -> IO ()
+interactive :: Ctx Name -> InputT IO ()
 interactive ctx = do
-    putStrFlush "hom-core> "
-    hSetBuffering stdin LineBuffering
-    line <- getLine
-    hSetBuffering stdin NoBuffering
-    ambs <- parseExceptIO interaction (tokenizeCore line)
+    line <- fromMaybe [] <$> getInputLine "hom-core> "
+    ambs <- parseExceptM outputStrLn interaction (tokenizeCore line)
     if null ambs then interactive ctx
     else case runWithCtx ctx $ resolveAmbig checkInteraction ambs of
-           Left err                        -> putStrLn err
+           Left err                        -> outputStrLn err
                                               >> interactive ctx
            Right (IAddToCtx ctxElts)       -> interactive (unionBy nominallyEq ctxElts ctx)
-           Right (IEvalResult (term, ty))  -> do putStrLn . ppr $ execWithCtx ctx (eval NF term)
-                                                 putStrLn $ ": " ++ ppr (execWithCtx ctx (eval NF ty))
+           Right (IEvalResult (term, ty))  -> do outputStrLn . ppr $ execWithCtx ctx (eval NF term)
+                                                 outputStrLn $ ": " ++ ppr (execWithCtx ctx (eval NF ty))
                                                  interactive ctx
            Right (IDoCommand IQuit)        -> return ()
            Right (IDoCommand (ILoad arg))  -> loadFile arg >>= \case
-                                                Nothing -> do putStrLn $ "[Error] [Interactive] Loading of " ++ arg ++ " failed"
-                                                              interactive ctx
-                                                Just (ctxElts,ds) -> do putStrLn $ "[Interactive] Loaded " ++ arg
-                                                                        putStrLn $ intercalate "\n\n" (reverse (ppr <$> ds))
-                                                                        interactive (unionBy nominallyEq ctxElts ctx)
-           Right (IDoCommand (IGetType s)) -> do tm <- parseExceptIO term s
+                                                   Nothing -> do outputStrLn $ "[Error] [Interactive] Loading of " ++ arg ++ " failed"
+                                                                 interactive ctx
+                                                   Just (ctxElts,ds) -> do outputStrLn $ "[Interactive] Loaded " ++ arg
+                                                                           outputStrLn $ intercalate "\n\n" (reverse (ppr <$> ds))
+                                                                           interactive (unionBy nominallyEq ctxElts ctx)
+           Right (IDoCommand (IGetType s)) -> do tm <- parseExceptM outputStrLn term s
                                                  case runWithCtx ctx $ resolveAmbig check tm of
-                                                   Left err -> putStrLn err
+                                                   Left err -> outputStrLn err
                                                                >> interactive ctx
-                                                   Right ty -> putStrLn (ppr (snd ty))
+                                                   Right ty -> outputStrLn (ppr (snd ty))
                                                                >> interactive ctx
            Right (IDoCommand (IGetDefn s)) -> do case runWithCtx ctx $ lookupTermVar s of
-                                                   Left err -> putStrLn err
+                                                   Left err -> outputStrLn err
                                                                >> interactive ctx
                                                    Right (ty, (Just def))
-                                                            -> putStrLn (s ++ " : " ++ ppr ty)
-                                                               >> putStr (replicate (length s) ' ')
-                                                               >> putStrLn (" := " ++ ppr def)
+                                                            -> outputStrLn (s ++ " : " ++ ppr ty)
+                                                               >> outputStr (replicate (length s) ' ')
+                                                               >> outputStrLn (" := " ++ ppr def)
                                                                >> interactive ctx
                                                    Right (ty, Nothing)
-                                                            -> putStrLn ("\'" ++ s ++ "\' has no definition")
+                                                            -> outputStrLn ("\'" ++ s ++ "\' has no definition")
                                                                >> interactive ctx
-           Right (IDoCommand IUnknown)     -> putStrLn "[Error] [Interactive] Command not recognized"
+           Right (IDoCommand IUnknown)     -> outputStrLn "[Error] [Interactive] Command not recognized"
                                               >> interactive ctx
 
 data InteractionResult v = IAddToCtx [CtxElement v]
@@ -124,10 +120,10 @@ checkInteraction (ICmnd c as) = pure (IDoCommand $ parseCmnd c as)
 main :: IO ()
 main = do
     args <- getArgs
-    case args of
+    runInputT defaultSettings $ case args of
         ("-i":flags) -> interactive []
         ("-interactive":flags) -> interactive []
         (filename:flags) -> runFile filename
-        [] -> error "No source file given. Use the command \"-i\" or \"-interactive\" to start an interactive session."
+        [] -> outputStrLn  "No source file given. Use the command \"-i\" or \"-interactive\" to start an interactive session."
 
 

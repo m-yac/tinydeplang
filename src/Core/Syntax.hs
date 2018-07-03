@@ -300,14 +300,15 @@ tokenizeCore :: String -> [Token]
 tokenizeCore = tokenize coreTkF
 
 varparseWild :: String -> Bool
-varparseWild (x:xs) = ( x == '_' && null xs ) || varparse (x:xs)
-varparseWild _      = False
+varparseWild "_" = True
+varparseWild xs = varparse xs
 
 varparse :: String -> Bool
-varparse     (x:xs) = (x:xs) `notElem` keywords
-                      && isAlpha x && x /= '𝕋'
-                      && all (\y -> isAlphaNum y || y == '-' || y == '_') xs
-varparse     _      = False
+varparse (x:xs) = (x:xs) `notElem` keywords
+                  && isAlpha x && x /= '𝕋'
+                  && all (\y -> isAlphaNum y || y == '-' || y == '_')
+                         (dropWhileEnd (== '\'') xs)
+varparse _      = False
 
 keywords :: [String]
 keywords = ["forall", "undefined", "def"]
@@ -335,12 +336,12 @@ declOrTerm = mdo
   
   let [ulvl0,ulvl1] = (<?> Thing "a universe level") <$> [i0,i1]
 
-  x0 <- rule $  mkVar <$> v
+  x0 <- rule $  mkVar <$> vE
             <|> l "𝕋{" *>w*> (mkUniverse <$> ulvl1) <*w<* lE "}"
             <|> l "𝕋{" *>w*> l "ω" *>w*> l "}" *> pure mkUniverseTop
             <|> l "(" *>w*> tm2 <*w<* lE ")"
   
-  x1 <- rule $      mkApp <$> (x1)              <*w<*> (x0)
+  x1 <- rule $      mkApp <$> (x1) <*w         <*> (x0)
             <|> mkULvlApp <$> (x1) <*w<* l "@" <*> (i0)
             <|> l "@+" *> (mkULift <$> (nat <?> Thing "a number")) <*w<*> (tm0)
             <|> x0
@@ -348,7 +349,7 @@ declOrTerm = mdo
   x2 <- rule $  xlam
             <|> l "forall" *>w*> xfalls
             <|> l "(" *>w*> (mkFun <$> vORwE) <*w<* lE ":" <*w<*> (ty2) <*w<* lE ")" <*w<* lE "->" <*w<*> (ty2)
-            <|>              (mkFun "__")                      <$> (ty1)               <*w<* lE "->" <*w<*> (ty2)
+            <|>             (mkFun "__")                      <$> (ty1)              <*w<* lE "->" <*w<*> (ty2)
             <|> l "∀" *>w*> (mkULvlFun <$> vE) <*w<* lE "," <*w<*> (ty2)
             <|> l "undefined" *>w*> lE ":" *>w*> (mkUndefined <$> ty2)
             <|> x1

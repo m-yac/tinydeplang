@@ -9,7 +9,7 @@ module Parser (
     -- * Parsing
     ParseExpect(..), flattenExpected,
     EarleyGrammar, EarleyPair, l, lE, w, dnl, varBy, terminalBy,
-    parseExcept, parseExceptIO, parseRaw, parseOneUnsafe,
+    parseExcept, parseExceptM, parseRaw, parseOneUnsafe,
     -- ** Exported from the Earley Haskell library
     rule, satisfy, terminal, (<?>),
     -- * Tokenizing
@@ -19,7 +19,6 @@ module Parser (
 ) where
 
 import Debug.Trace
-import Control.Applicative
 import Control.Monad.Except
 import Data.Bifunctor
 import Data.List
@@ -240,9 +239,10 @@ parseExcept g tks = case tks of
                                                     else "nothing.")
         (parses, Report _ _ _) -> return parses
 
--- | Like 'parseExcept', but if an error occurs it is printed and @[]@ is returned
-parseExceptIO :: EarleyGrammar t -> [Token] -> IO [t String]
-parseExceptIO g = either (\err -> putStrLn err >> return []) (return) . runExcept . parseExcept g
+-- | Like 'parseExcept', but if an error occurs it is handled as given and @[]@ is returned
+parseExceptM :: Monad m => (String -> m a)
+             -> EarleyGrammar t -> [Token] -> m [t String]
+parseExceptM f g = either (\err -> f err >> return []) (return) . runExcept . parseExcept g
 
 -- | The raw output of a parse
 parseRaw :: EarleyGrammar t -> [Token] -> ([t String], Report ParseExpect [Token])

@@ -18,7 +18,6 @@ import Data.Maybe
 import Control.Monad.Except
 import Data.Functor.Classes
 import Data.Foldable
-import Data.Deriving (deriveShow1) 
 
 import qualified Bound as Bnd
 
