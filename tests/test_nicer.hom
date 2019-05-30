@@ -1,0 +1,14 @@
+
+def Empty : 𝕋{0} by ()
+
+def Nat : 𝕋{0} by
+    O : Nat,
+    S : Nat -> Nat
+
+
+def id : ∀ i, forall (A : 𝕋{i}), A -> A
+       := (i) (A : 𝕋{i}) (x : A) >-> x
+
+def main : 𝕋{1} := id @2 𝕋{1} 𝕋{0}
+
+
